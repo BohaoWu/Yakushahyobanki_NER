@@ -1,0 +1,29 @@
+# Deep Learning
+torch>=2.0.0
+transformers>=4.41.0
+datasets>=2.19.0
+peft>=0.7.1
+bitsandbytes>=0.41.3
+accelerate>=0.30.0
+
+# NER
+pytorch-crf>=0.7.2
+seqeval>=1.2.2
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.26.0
+spacy-alignments>=0.9.0
+sentencepiece>=0.2.0
+protobuf>=3.20.0
+tqdm>=4.65.0
+
+# Visualization
+matplotlib>=3.5.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Remote LLM API
+openai>=1.0.0
+anthropic>=0.18.0

@@ -1,0 +1,30 @@
+dataset/
+logs/
+experiments/
+synthetic_data/
+corpus/
+pic/
+tmp/
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Environment variables
+.env
+config/.env
+*.backup
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+.DS_Store

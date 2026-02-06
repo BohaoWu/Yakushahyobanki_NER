@@ -1,0 +1,110 @@
+{
+  "experiment_name": "mlm_finetuning_100000",
+  "description": "Two-stage training: 1) MLM pretrain on corpus_gennbun.txt 2) Fine-tune on few-shot data",
+  "models": [
+    {
+      "name": "bert",
+      "model_id": "bert",
+      "use_crf": false
+    },
+    {
+      "name": "bert",
+      "model_id": "bert_crf",
+      "use_crf": true
+    },
+    {
+      "name": "bert-large",
+      "model_id": "bert_large",
+      "use_crf": false
+    },
+    {
+      "name": "bert-large",
+      "model_id": "bert_large_crf",
+      "use_crf": true
+    },
+    {
+      "name": "roberta",
+      "model_id": "roberta",
+      "use_crf": false
+    },
+    {
+      "name": "roberta",
+      "model_id": "roberta_crf",
+      "use_crf": true
+    },
+    {
+      "name": "luke",
+      "model_id": "luke",
+      "use_crf": false
+    },
+    {
+      "name": "luke",
+      "model_id": "luke_crf",
+      "use_crf": true
+    },
+    {
+      "name": "albert",
+      "model_id": "albert",
+      "use_crf": false
+    },
+    {
+      "name": "albert",
+      "model_id": "albert_crf",
+      "use_crf": true
+    },
+    {
+      "name": "deberta",
+      "model_id": "deberta",
+      "use_crf": false
+    },
+    {
+      "name": "deberta",
+      "model_id": "deberta_crf",
+      "use_crf": true
+    },
+    {
+      "name": "bilstm",
+      "model_id": "bilstm",
+      "use_crf": false
+    },
+    {
+      "name": "bilstm",
+      "model_id": "bilstm_crf",
+      "use_crf": true
+    }
+  ],
+  "data": {
+    "datasets": [
+      "dataset/yakusha_annotated_data_few-shot"
+    ],
+    "epochs": [
+      20
+    ]
+  },
+  "training": {
+    "batch_size": 64,
+    "learning_rate": 2e-05,
+    "seed": 42
+  },
+  "mlm_pretrain": {
+    "enabled": true,
+    "corpus": "corpus/corpus_gennbun.txt",
+    "corpus_size": 100000,
+    "epochs": 3,
+    "batch_size": 16,
+    "learning_rate": 5e-05,
+    "mlm_probability": 0.15
+  },
+  "output": {
+    "dir": "experiments/mlm_finetuning_100000_${timestamp}",
+    "save_model": true
+  },
+  "advanced": {
+    "run_in_background": false,
+    "log_file": "logs/mlm_finetuning_100000.log"
+  },
+  "evaluation": {
+    "enabled": true,
+    "output_dir": "experiments/mlm_finetuning_100000_${timestamp}/evaluation_report"
+  }
+}
