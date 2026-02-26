@@ -139,13 +139,6 @@ Examples:
         help='API provider (default: openai, options: claude)'
     )
 
-    parser.add_argument(
-        '--lang',
-        default='ja',
-        choices=['ja', 'de', 'fr', 'en'],
-        help='Target language for prompt generation (default: ja)'
-    )
-
     args = parser.parse_args()
 
     # Set default model based on provider
@@ -188,7 +181,6 @@ Examples:
     print(f"Parallel threads: {args.workers}")
     print(f"API provider: {args.provider}")
     print(f"Model: {args.model}")
-    print(f"Language: {args.lang}")
     print("=" * 80)
 
     # Generate data
@@ -203,8 +195,7 @@ Examples:
             api_key=args.api_key,
             model=args.model,
             num_workers=args.workers,
-            provider=args.provider,
-            lang=args.lang
+            provider=args.provider
         )
     elif use_topn_mode:
         dataset = create_topn_dataset(
@@ -215,8 +206,7 @@ Examples:
             api_key=args.api_key,
             model=args.model,
             num_workers=args.workers,
-            provider=args.provider,
-            lang=args.lang
+            provider=args.provider
         )
     else:
         target_samples = args.target_samples or 2000
@@ -226,8 +216,7 @@ Examples:
             target_samples=target_samples,
             api_key=args.api_key,
             model=args.model,
-            num_workers=args.workers,
-            lang=args.lang
+            num_workers=args.workers
         )
 
     print("\n" + "=" * 80)

@@ -322,7 +322,6 @@ MLM_ENABLED=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['ml
 BASE_OUTPUT_DIR=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['output']['dir'])")
 SAVE_MODEL=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['output'].get('save_model', True))")
 LOG_FILE_BASE=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['advanced'].get('log_file', ''))")
-SPLIT_MODE=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['data'].get('split_mode', 'default'))")
 
 # Detect GPU environment
 NUM_GPUS=$(get_num_gpus)
@@ -369,7 +368,6 @@ for MODEL_IDX in $(seq 0 $((NUM_MODELS - 1))); do
     MODEL_NAME_OR_KEY=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['models'][$MODEL_IDX]['name'])")
     CUSTOM_MODEL_ID=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['models'][$MODEL_IDX].get('model_id', ''))")
     USE_CRF=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['models'][$MODEL_IDX].get('use_crf', False))")
-    USE_TRANSFORMER_CRF=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['models'][$MODEL_IDX].get('use_transformer_crf', False))")
     USE_LORA=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['models'][$MODEL_IDX].get('use_lora', False))")
     USE_4BIT=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['models'][$MODEL_IDX].get('use_4bit', False))")
     REMOTE_LLM_PROVIDER=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['models'][$MODEL_IDX].get('provider', ''))")
@@ -475,16 +473,8 @@ EOF
     CMD="$CMD --seed $SEED"
     CMD="$CMD --output-dir \"$OUTPUT_DIR\""
 
-    if [ "$SPLIT_MODE" != "default" ]; then
-        CMD="$CMD --split-mode $SPLIT_MODE"
-    fi
-
     if [ "$USE_CRF" = "True" ]; then
         CMD="$CMD --use-crf"
-    fi
-
-    if [ "$USE_TRANSFORMER_CRF" = "True" ]; then
-        CMD="$CMD --use-transformer-crf"
     fi
 
     if [ "$USE_LORA" = "True" ]; then
