@@ -6,11 +6,6 @@ peft>=0.7.1
 bitsandbytes>=0.41.3
 accelerate>=0.30.0
 
-# NVIDIA NeMo (for LLaMA models)
-nemo_toolkit[nlp]>=2.0.0
-pytorch-lightning>=2.0.0
-megatron-core>=0.4.0
-
 # NER
 pytorch-crf>=0.7.2
 seqeval>=1.2.2

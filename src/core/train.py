@@ -16,7 +16,7 @@ __all__ = [
     # LLM Model hierarchy
     'HistoryDocumentModelLLM',           # Base for all LLM models
     'HistoryDocumentModelLocalLLM',      # Base for local LLMs
-    'HistoryDocumentModelLLaMA',         # LLaMA implementation (NeMo)
+    'HistoryDocumentModelLLaMA',         # LLaMA implementation
     'HistoryDocumentModelRemoteLLM',     # Base for remote LLMs
     'HistoryDocumentModelRemoteLLMChatGPT',
     'HistoryDocumentModelRemoteLLMClaude',
@@ -30,7 +30,7 @@ __all__ = [
     # LLM Trainer hierarchy
     'HistoryDocumentTrainerLLM',         # Base for all LLM trainers
     'HistoryDocumentTrainerLocalLLM',    # Base for local LLM trainers
-    'HistoryDocumentTrainerLLaMA',       # LLaMA trainer (NeMo)
+    'HistoryDocumentTrainerLLaMA',       # LLaMA trainer
     'HistoryDocumentTrainerRemoteLLM',   # Base for remote LLM trainers
     'HistoryDocumentTrainerRemoteLLMChatGPT',
     'HistoryDocumentTrainerRemoteLLMClaude',
@@ -55,7 +55,6 @@ from transformers.tokenization_utils_base import BatchEncoding
 from src.config.config import MODEL_CONFIGS, get_openai_api_key, get_anthropic_api_key
 
 from transformers import (
-    AutoModel,
     AutoModelForTokenClassification,
     AutoModelForMaskedLM,
     AutoModelForCausalLM,
@@ -384,9 +383,6 @@ class BiLSTMWithCRF(nn.Module):
         Note: BiLSTM uses BERT tokenizer which adds [CLS] at the start.
         We skip the first token (CLS) for CRF processing, similar to CRFWrapper.
         """
-        # Remove num_items_in_batch (added by transformers 4.53+ Trainer)
-        kwargs.pop('num_items_in_batch', None)
-
         # Get BiLSTM output
         output = self.bilstm(
             input_ids=input_ids,
@@ -584,10 +580,6 @@ class CRFWrapper(torch.nn.Module):
         **kwargs
     ):
         """Forward pass with CRF layer"""
-        # Remove num_items_in_batch (added by transformers 4.53+ Trainer)
-        # as it is not accepted by most base models' forward()
-        kwargs.pop('num_items_in_batch', None)
-
         # Get predictions from base model
         output = self.base_model(
             input_ids=input_ids,
@@ -725,10 +717,9 @@ class BertWithCrfForTokenClassification(BertForTokenClassification):
     def forward(
         self,
         input_ids: torch.Tensor,
-        attention_mask=None,
-        token_type_ids=None,
-        labels: torch.Tensor = None,
-        **kwargs
+        attention_mask,
+        token_type_ids,
+        labels: torch.Tensor,
     ):
         """Forward pass with CRF layer"""
         # Get predictions from BERT
@@ -786,111 +777,6 @@ class BertWithCrfForTokenClassification(BertForTokenClassification):
         for seq in decoded:
             result.append([0] + seq)  # Prepend O tag for CLS token
         return result
-
-
-class BertTransformerCRFModel(torch.nn.Module):
-    """BERT + 2-Layer Transformer Encoder + CRF model for token classification.
-
-    Architecture: BERT → 2× TransformerEncoder → Linear → CRF
-    Uses AutoModel (not AutoModelForTokenClassification) to get BERT hidden states,
-    then adds extra Transformer encoder layers and a CRF layer.
-    """
-
-    def __init__(self, model_name, num_labels, label2id,
-                 n_transformer_layers=2, nhead=8, dim_feedforward=2048, dropout=0.1):
-        super().__init__()
-        if CRF is None:
-            raise ImportError(
-                "torchcrf is required for CRF layer. Install it with: pip install pytorch-crf"
-            )
-
-        self.label2id = label2id
-        self.num_labels = num_labels
-
-        # 1. BERT encoder (hidden states only)
-        self.bert = AutoModel.from_pretrained(model_name)
-        hidden_size = self.bert.config.hidden_size
-
-        # 2. Additional Transformer encoder layers
-        encoder_layer = torch.nn.TransformerEncoderLayer(
-            d_model=hidden_size,
-            nhead=nhead,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            batch_first=True,
-        )
-        self.transformer_encoder = torch.nn.TransformerEncoder(
-            encoder_layer, num_layers=n_transformer_layers
-        )
-
-        # 3. Classification head
-        self.classifier = torch.nn.Linear(hidden_size, num_labels)
-        self.dropout = torch.nn.Dropout(dropout)
-
-        # 4. CRF layer
-        self.crf = CRF(num_labels, batch_first=True)
-        st, t, et = create_crf_transitions(label2id)
-        self.crf.start_transitions.data = st
-        self.crf.transitions.data = t
-        self.crf.end_transitions.data = et
-
-        # Expose config for HuggingFace Trainer compatibility
-        self.config = self.bert.config
-        self.config.num_labels = num_labels
-        self.config.label2id = label2id
-        self.config.id2label = {i: l for l, i in label2id.items()}
-
-    def forward(self, input_ids, attention_mask=None, token_type_ids=None,
-                labels=None, **kwargs):
-        kwargs.pop('num_items_in_batch', None)
-
-        # BERT encoding
-        bert_output = self.bert(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-        )
-        hidden_states = bert_output.last_hidden_state  # [batch, seq, hidden]
-
-        # Transformer encoder with padding mask
-        src_key_padding_mask = None
-        if attention_mask is not None:
-            src_key_padding_mask = (attention_mask == 0)  # True = ignore
-
-        encoded = self.transformer_encoder(
-            hidden_states, src_key_padding_mask=src_key_padding_mask
-        )
-
-        # Classification
-        logits = self.classifier(self.dropout(encoded))  # [batch, seq, num_labels]
-
-        loss = None
-        if labels is not None:
-            # Skip [CLS] token for CRF (BERT-like model)
-            logits_for_crf = logits[:, 1:, :]
-            labels_for_crf = labels[:, 1:]
-            mask = labels_for_crf != -100
-            labels_crf = labels_for_crf.clone()
-            labels_crf[~mask] = 0
-            mask[:, 0] = True  # CRF requires first timestep to be valid
-
-            loss = -self.crf(
-                logits_for_crf, labels_crf, mask=mask, reduction="mean"
-            )
-
-        return TokenClassifierOutput(loss=loss, logits=logits)
-
-    def decode(self, logits, attention_mask=None):
-        """Viterbi decoding for CRF predictions."""
-        logits_no_cls = logits[:, 1:, :]
-        if attention_mask is None:
-            mask = torch.ones(logits_no_cls.shape[:2], dtype=torch.bool, device=logits.device)
-        else:
-            mask = attention_mask[:, 1:].bool()
-        mask[:, 0] = True
-
-        decoded = self.crf.decode(logits_no_cls, mask=mask)
-        return [[0] + seq for seq in decoded]  # Prepend O tag for [CLS]
 
 
 class HistoryDocumentResult:
@@ -1624,8 +1510,7 @@ class HistoryDocumentModel:
 class HistoryDocumentModelBERT(HistoryDocumentModel):
     """BERT-based model wrapper for NER with optional CRF layer"""
 
-    def __init__(self, model_name: str, label2id: dict, id2label: dict,
-                 use_crf: bool = False, use_transformer_crf: bool = False):
+    def __init__(self, model_name: str, label2id: dict, id2label: dict, use_crf: bool = False):
         """
         Initialize BERT model wrapper
 
@@ -1634,11 +1519,9 @@ class HistoryDocumentModelBERT(HistoryDocumentModel):
             label2id: Label to ID mapping
             id2label: ID to label mapping
             use_crf: Whether to use CRF layer on top of BERT (default: False)
-            use_transformer_crf: Whether to use BERT + 2-Layer Transformer + CRF (default: False)
         """
         super().__init__(model_name, label2id, id2label)
         self.use_crf = use_crf
-        self.use_transformer_crf = use_transformer_crf
 
         # Load model, tokenizer, and data collator
         self._load_model()
@@ -1647,19 +1530,9 @@ class HistoryDocumentModelBERT(HistoryDocumentModel):
 
     def _load_model(self):
         """Load model with or without CRF layer (supports all BERT-like models)"""
+        # First, load the base model using AutoModelForTokenClassification
+        # This automatically handles BERT, RoBERTa, DeBERTa, ALBERT, LUKE, etc.
         print(f"Loading model: {self.model_name}")
-
-        if self.use_transformer_crf:
-            # BERT + 2-Layer Transformer Encoder + CRF
-            print(f"Building BERT + 2-Layer Transformer + CRF model")
-            self.model = BertTransformerCRFModel(
-                model_name=self.model_name,
-                num_labels=len(self.label2id),
-                label2id=self.label2id,
-            )
-            return
-
-        # Standard path: load AutoModelForTokenClassification
         base_model = AutoModelForTokenClassification.from_pretrained(
             self.model_name,
             num_labels=len(self.label2id),
@@ -1740,7 +1613,6 @@ class HistoryDocumentModelLLM(HistoryDocumentModel):
 
     # Entity type descriptions (shared by all LLM models)
     ENTITY_DESCRIPTIONS = {
-        # Japanese (Yakusha)
         "役者": "歌舞伎役者の名前",
         "興行関係者": "劇場や興行に関わる人や組織",
         "俳名": "俳号",
@@ -1752,62 +1624,18 @@ class HistoryDocumentModelLLM(HistoryDocumentModel):
         "屋号": "屋号",
         "音曲": "音曲関連",
         "事項": "その他の固有名詞",
-        # HIPE / multilingual
-        "PER": "Person name",
-        "LOC": "Location / place name",
-        "ORG": "Organization",
-        "HumanProd": "Human production (book, artwork, etc.)",
-        "pers": "Person name",
-        "loc": "Location / place name",
-        "org": "Organization",
-        "time": "Temporal expression",
-        "prod": "Product / production",
     }
 
-    PROMPT_TEMPLATES = {
-        "ja": {
-            "instruction": "以下の日本古典演劇関連のテキストから固有表現を抽出してJSON形式で出力してください。\n\n固有表現の種類:\n",
-            "format": '\n出力形式:\n[{"type": "役者", "text": "三升", "span": [5, 7]}]\n\n固有表現が見つからない場合は空のリスト []を出力してください。\n',
-            "examples_header": "\n以下に例を示します：\n",
-            "example": "例{i}:\nテキスト: {text}\n回答: {answer}\n",
-            "query": "\nテキスト: {text}\n回答:",
-        },
-        "de": {
-            "instruction": "Extrahiere benannte Entitäten aus dem folgenden historischen Zeitungstext (17.–19. Jahrhundert) und gib sie im JSON-Format aus.\n\nEntitätstypen:\n",
-            "format": '\nAusgabeformat:\n[{"type": "PER", "text": "Johann", "span": [0, 6]}]\n\nWenn keine Entitäten gefunden werden, gib eine leere Liste [] aus.\n',
-            "examples_header": "\nBeispiele:\n",
-            "example": "Beispiel {i}:\nText: {text}\nAntwort: {answer}\n",
-            "query": "\nText: {text}\nAntwort:",
-        },
-        "fr": {
-            "instruction": "Extraire les entités nommées du texte de presse historique suivant (XVIIe–XIXe siècle) et les produire au format JSON.\n\nTypes d'entités:\n",
-            "format": '\nFormat de sortie:\n[{"type": "PER", "text": "Jean", "span": [0, 4]}]\n\nSi aucune entité n\'est trouvée, produire une liste vide [].\n',
-            "examples_header": "\nExemples:\n",
-            "example": "Exemple {i}:\nTexte: {text}\nRéponse: {answer}\n",
-            "query": "\nTexte: {text}\nRéponse:",
-        },
-        "en": {
-            "instruction": "Extract named entities from the following historical newspaper text (17th–19th century) and output in JSON format.\n\nEntity types:\n",
-            "format": '\nOutput format:\n[{"type": "PER", "text": "John", "span": [0, 4]}]\n\nIf no entities are found, output an empty list [].\n',
-            "examples_header": "\nExamples:\n",
-            "example": "Example {i}:\nText: {text}\nAnswer: {answer}\n",
-            "query": "\nText: {text}\nAnswer:",
-        },
-    }
-
-    def __init__(self, model_name: str, label2id: dict, id2label: dict,
-                 dataset_lang: str = "auto", **kwargs):
+    def __init__(self, model_name: str, label2id: dict, id2label: dict, **kwargs):
         """Initialize LLM model wrapper
 
         Args:
             model_name: Model name or path
             label2id: Label to ID mapping
             id2label: ID to label mapping
-            dataset_lang: Language code (ja/de/fr/en) or "auto" to detect from entity types
         """
         super().__init__(model_name, label2id, id2label)
         self.label_list = [label for label in label2id.keys()]
-        self.dataset_lang = dataset_lang if dataset_lang != "auto" else self._detect_lang_fallback()
 
     def _get_entity_types(self) -> List[str]:
         """Extract entity types from label list"""
@@ -1818,37 +1646,11 @@ class HistoryDocumentModelLLM(HistoryDocumentModel):
                 entity_types.add(entity_type)
         return list(entity_types)
 
-    @staticmethod
-    def _detect_lang_from_path(dataset_path: str) -> str:
-        """Detect language from dataset path.
-
-        Looks for known language codes (ja/de/fr/en) as path components.
-        Falls back to "en" if not found.
-        """
-        import os
-        parts = os.path.normpath(dataset_path).split(os.sep)
-        known_langs = {"ja", "de", "fr", "en"}
-        for part in reversed(parts):
-            if part.lower() in known_langs:
-                return part.lower()
-        # Japanese dataset heuristic: path contains "yakusha" or "ukiyoe"
-        path_lower = dataset_path.lower()
-        if "yakusha" in path_lower or "ukiyoe" in path_lower:
-            return "ja"
-        return "en"
-
-    def _detect_lang_fallback(self) -> str:
-        """Fallback: detect language from entity type names (CJK = ja, else en)"""
-        import unicodedata
-        for label in self.label_list:
-            for ch in label:
-                if unicodedata.category(ch).startswith('Lo'):
-                    return "ja"
-        return "en"
-
     def _build_ner_prompt(self, text: str, entities: list = None,
                           examples: List[dict] = None, is_training: bool = False) -> str:
-        """Build NER prompt using language-specific templates.
+        """Build NER prompt in unified format
+
+        This method creates prompts compatible with all LLM models.
 
         Args:
             text: Input text to extract entities from
@@ -1860,31 +1662,40 @@ class HistoryDocumentModelLLM(HistoryDocumentModel):
             Formatted prompt string
         """
         entity_types = self._get_entity_types()
-        tpl = self.PROMPT_TEMPLATES.get(self.dataset_lang, self.PROMPT_TEMPLATES["en"])
 
-        # Instruction + entity type list
-        prompt = tpl["instruction"]
+        # Build prompt
+        prompt = """以下の日本古典演劇関連のテキストから固有表現を抽出してJSON形式で出力してください。
+
+固有表現の種類:
+"""
         for etype in entity_types:
             desc = self.ENTITY_DESCRIPTIONS.get(etype, etype)
             prompt += f"- {etype}: {desc}\n"
-        prompt += tpl["format"]
 
-        # Few-shot examples
+        prompt += """
+出力形式:
+[{"type": "役者", "text": "三升", "span": [5, 7]}, {"type": "演目名", "text": "伊豆日記", "span": [15, 19]}]
+
+固有表現が見つからない場合は空のリスト []を出力してください。
+"""
+
+        # Add few-shot examples if provided
         if examples:
-            prompt += tpl["examples_header"]
+            prompt += "\n以下に例を示します：\n"
             for i, ex in enumerate(examples, 1):
                 ex_text = ex.get('text', '')
                 ex_entities = ex.get('entities', [])
-                answer = json.dumps(ex_entities, ensure_ascii=False)
-                prompt += "\n" + tpl["example"].format(i=i, text=ex_text, answer=answer)
+                entities_json = json.dumps(ex_entities, ensure_ascii=False)
+                prompt += f"\n例{i}:\nテキスト: {ex_text}\n回答: {entities_json}\n"
             prompt += "\n---\n"
 
-        # Query
-        prompt += tpl["query"].format(text=text)
+        # Add the input text
+        prompt += f"\nテキスト: {text}\n回答:"
 
         # Add answer for training
         if is_training and entities is not None:
-            prompt += f" {json.dumps(entities, ensure_ascii=False)}"
+            entities_json = json.dumps(entities, ensure_ascii=False)
+            prompt += f" {entities_json}"
 
         return prompt
 
@@ -1908,8 +1719,8 @@ class HistoryDocumentModelLLM(HistoryDocumentModel):
             if code_match:
                 response = code_match.group(1).strip()
 
-        # Try to find JSON array (supports all language prompt formats)
-        output_match = re.search(r'(?:回答|Answer|Antwort|Réponse):\s*(\[[\s\S]*?\])', response)
+        # Try to find JSON array
+        output_match = re.search(r'回答:\s*(\[[\s\S]*?\])', response)
         if output_match:
             array_str = output_match.group(1)
         else:
@@ -2108,20 +1919,16 @@ class HistoryDocumentModelLocalLLM(HistoryDocumentModelLLM):
 
 
 class HistoryDocumentModelLLaMA(HistoryDocumentModelLocalLLM):
-    """LLaMA-based model wrapper for NER using NVIDIA NeMo framework
-
-    Uses NeMo for faster model loading and inference compared to HuggingFace.
-    Supports LoRA fine-tuning and optional quantization.
-    """
+    """LLaMA-based model wrapper for NER with LoRA and optional quantization"""
 
     def __init__(self, model_name: str, label2id: dict, id2label: dict,
                  use_lora: bool = True, lora_r: int = 16, lora_alpha: int = 32,
                  lora_dropout: float = 0.05, use_4bit: bool = False):
         """
-        Initialize LLaMA model wrapper with NeMo backend
+        Initialize LLaMA model wrapper
 
         Args:
-            model_name: LLaMA model name or path (e.g., 'meta-llama/Llama-3.2-1B')
+            model_name: LLaMA model name or path (e.g., 'rinna/japanese-gpt-neox-3.6b')
             label2id: Label to ID mapping
             id2label: ID to label mapping
             use_lora: Whether to use LoRA for parameter-efficient fine-tuning (default: True)
@@ -2136,7 +1943,6 @@ class HistoryDocumentModelLLaMA(HistoryDocumentModelLocalLLM):
         self.lora_alpha = lora_alpha
         self.lora_dropout = lora_dropout
         self.use_4bit = use_4bit
-        self._use_nemo = False  # Flag to track if NeMo is being used
 
         # Load model, tokenizer, and data collator
         self._load_model()
@@ -2144,67 +1950,7 @@ class HistoryDocumentModelLLaMA(HistoryDocumentModelLocalLLM):
         self._create_data_collator()
 
     def _load_model(self):
-        """Load LLaMA model using NeMo framework (with HuggingFace fallback)"""
-        import os
-
-        # Try NeMo first
-        try:
-            self._load_model_nemo()
-            self._use_nemo = True
-            return
-        except ImportError as e:
-            print(f"NeMo not available ({e}), falling back to HuggingFace...")
-        except Exception as e:
-            print(f"NeMo loading failed ({e}), falling back to HuggingFace...")
-
-        # Fallback to HuggingFace
-        self._load_model_huggingface()
-
-    def _load_model_nemo(self):
-        """Load LLaMA model using NVIDIA NeMo 2.x framework"""
-        try:
-            from nemo.collections.llm import import_ckpt
-            from nemo.collections.llm.gpt.model.llama import LlamaModel
-            from nemo.collections.llm.peft.lora import LoRA
-            from nemo import lightning as nl
-            import pytorch_lightning as pl
-        except ImportError:
-            raise ImportError(
-                "NeMo support requires 'nemo_toolkit[nlp]', 'pytorch-lightning' and 'nemo_run'. "
-                "Install with: pip install nemo_toolkit[nlp] pytorch-lightning nemo_run"
-            )
-
-        import os as _os
-        print(f"Loading LLaMA model via NeMo: {self.model_name}")
-
-        # Check if this is a .nemo checkpoint or HuggingFace model
-        if self.model_name.endswith('.nemo') or _os.path.isfile(self.model_name):
-            # Load from .nemo checkpoint
-            print(f"Loading from NeMo checkpoint: {self.model_name}")
-            self.nemo_model = nl.Trainer.restore_from(self.model_name)
-        else:
-            # Import HuggingFace model via NeMo
-            print(f"Importing HuggingFace model to NeMo format...")
-            self.nemo_model = import_ckpt(
-                model=LlamaModel,
-                source=f"hf://{self.model_name}",
-            )
-
-        # Apply LoRA if requested
-        if self.use_lora:
-            print(f"Applying LoRA (r={self.lora_r}, alpha={self.lora_alpha})...")
-            self.lora_config = LoRA(
-                dim=self.lora_r,
-                alpha=self.lora_alpha,
-                dropout=self.lora_dropout,
-            )
-
-        # Wrap for compatibility with existing interface
-        self.model = self.nemo_model
-        print(f"Successfully loaded LLaMA model via NeMo!")
-
-    def _load_model_huggingface(self):
-        """Fallback: Load LLaMA model using HuggingFace (original implementation)"""
+        """Load LLaMA model with optional LoRA and quantization"""
         try:
             from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, PeftModel
             from transformers import BitsAndBytesConfig
@@ -2256,7 +2002,7 @@ class HistoryDocumentModelLLaMA(HistoryDocumentModelLocalLLM):
 
         else:
             # Load from scratch
-            print(f"Loading LLaMA model via HuggingFace: {self.model_name}")
+            print(f"Loading LLaMA model: {self.model_name}")
 
             # Configure quantization
             bnb_config = None
@@ -2609,331 +2355,24 @@ class HistoryDocumentModelBiLSTM(HistoryDocumentModel):
 class HistoryDocumentDataset:
     """Wrapper for dataset with loading and tokenization"""
 
-    def __init__(self, dataset_path: str, split_mode: str = "default"):
+    def __init__(self, dataset_path: str):
         """
         Initialize dataset wrapper
 
         Args:
             dataset_path: Path to dataset
-            split_mode: Split strategy for TSV datasets.
-                - "default": 80/10/10 train/val/test split
-                - "zero_shot": Split by entity types. Train on a subset of entity types,
-                  test on held-out entity types the model has never seen.
-                - "zero_shot_entity": Split by entity instances. All entity types are
-                  seen during training, but ~30% of unique entity names are held out.
         """
         self.dataset_path = dataset_path
-        self.split_mode = split_mode
         self.train_data = None
         self.val_data = None
         self.test_data = None
-        self.entity_types = []  # Auto-detected entity types
 
         # Load dataset
         self._load_dataset()
 
-        # Auto-detect entity types from loaded data
-        self._detect_entity_types()
-
-    def _convert_tsv_to_dataset(self, tsv_files):
-        """Convert HIPE TSV format files to internal dataset format
-
-        TSV format: token<TAB>BIO_tag per line, empty lines separate sentences.
-        Output format matches yakusya_annotated_data: {curid, text, entities}
-        """
-        import uuid
-        import random
-
-        all_examples = []
-        for filepath in tsv_files:
-            sentences = []  # list of [(token, tag), ...]
-            current_sentence = []
-
-            with open(filepath, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.rstrip('\n')
-                    if not line:
-                        if current_sentence:
-                            sentences.append(current_sentence)
-                            current_sentence = []
-                        continue
-                    parts = line.split('\t')
-                    if len(parts) >= 2:
-                        current_sentence.append((parts[0], parts[1]))
-                    elif len(parts) == 1:
-                        current_sentence.append((parts[0], 'O'))
-                if current_sentence:
-                    sentences.append(current_sentence)
-
-            # Convert each sentence to {curid, text, entities}
-            for sentence in sentences:
-                tokens = [t[0] for t in sentence]
-                tags = [t[1] for t in sentence]
-                text = ' '.join(tokens)
-
-                # Build character-level spans from BIO tags
-                entities = []
-                char_pos = 0
-                current_entity = None
-
-                for i, (token, tag) in enumerate(zip(tokens, tags)):
-                    token_start = char_pos
-                    token_end = char_pos + len(token)
-
-                    if tag.startswith('B-'):
-                        # Close previous entity
-                        if current_entity:
-                            entities.append(current_entity)
-                        entity_type = tag[2:]
-                        current_entity = {
-                            'name': token,
-                            'span': [token_start, token_end],
-                            'type': entity_type,
-                        }
-                    elif tag.startswith('I-') and current_entity:
-                        # Extend current entity
-                        current_entity['name'] += ' ' + token
-                        current_entity['span'][1] = token_end
-                    else:
-                        # O tag - close current entity
-                        if current_entity:
-                            entities.append(current_entity)
-                            current_entity = None
-
-                    char_pos = token_end + 1  # +1 for space
-
-                # Close last entity
-                if current_entity:
-                    entities.append(current_entity)
-
-                all_examples.append({
-                    'curid': str(uuid.uuid4()),
-                    'text': text,
-                    'entities': entities,
-                })
-
-        # Split into train/val/test
-        random.seed(42)
-
-        if self.split_mode == "zero_shot":
-            self._zero_shot_split(all_examples)
-        elif self.split_mode == "zero_shot_entity":
-            self._zero_shot_entity_split(all_examples)
-        else:
-            # Default: 80/10/10 random split
-            random.shuffle(all_examples)
-            n = len(all_examples)
-            train_end = int(n * 0.8)
-            val_end = int(n * 0.9)
-
-            self.train_data = Dataset.from_list(all_examples[:train_end])
-            self.val_data = Dataset.from_list(all_examples[train_end:val_end])
-            self.test_data = Dataset.from_list(all_examples[val_end:])
-            print(f"Loaded TSV dataset: {n} sentences (train={train_end}, val={val_end - train_end}, test={n - val_end})")
-
-    def _zero_shot_split(self, all_examples):
-        """Zero-shot split: hold out some entity types for test only.
-
-        Entity types are sorted alphabetically then split so that ~30% of types
-        are unseen during training. Sentences are assigned based on which entity
-        types they contain:
-        - Sentences with ONLY unseen types -> test set
-        - Sentences with ONLY seen types -> train/val (90/10)
-        - Sentences with mixed types -> test set (to avoid leaking unseen types)
-        - Sentences with no entities -> distributed proportionally
-        """
-        import random
-
-        # Collect all entity types
-        type_set = set()
-        for ex in all_examples:
-            for ent in ex.get('entities', []):
-                etype = ent.get('type', '')
-                if etype:
-                    type_set.add(etype)
-
-        all_types = sorted(type_set)
-        if len(all_types) < 2:
-            print(f"Warning: Only {len(all_types)} entity type(s) found, falling back to default split")
-            random.shuffle(all_examples)
-            n = len(all_examples)
-            train_end = int(n * 0.8)
-            val_end = int(n * 0.9)
-            self.train_data = Dataset.from_list(all_examples[:train_end])
-            self.val_data = Dataset.from_list(all_examples[train_end:val_end])
-            self.test_data = Dataset.from_list(all_examples[val_end:])
-            print(f"Loaded TSV dataset: {n} sentences (train={train_end}, val={val_end - train_end}, test={n - val_end})")
-            return
-
-        # Hold out ~30% of entity types as unseen
-        n_unseen = max(1, int(len(all_types) * 0.3))
-        random.shuffle(all_types)
-        unseen_types = set(all_types[:n_unseen])
-        seen_types = set(all_types[n_unseen:])
-
-        print(f"Zero-shot split: {len(seen_types)} seen types = {sorted(seen_types)}")
-        print(f"Zero-shot split: {len(unseen_types)} unseen types = {sorted(unseen_types)}")
-
-        # Categorize sentences
-        seen_only = []     # Only contain seen entity types -> train/val
-        unseen_or_mixed = []  # Contain any unseen type -> test
-        no_entities = []   # No entities at all
-
-        for ex in all_examples:
-            ex_types = set()
-            for ent in ex.get('entities', []):
-                etype = ent.get('type', '')
-                if etype:
-                    ex_types.add(etype)
-
-            if not ex_types:
-                no_entities.append(ex)
-            elif ex_types.issubset(seen_types):
-                seen_only.append(ex)
-            else:
-                # Has at least one unseen type (pure unseen or mixed)
-                unseen_or_mixed.append(ex)
-
-        # Distribute no-entity sentences proportionally
-        random.shuffle(no_entities)
-        n_no_ent = len(no_entities)
-        n_no_ent_train = int(n_no_ent * 0.7)
-        seen_only.extend(no_entities[:n_no_ent_train])
-        unseen_or_mixed.extend(no_entities[n_no_ent_train:])
-
-        # Split seen_only into train/val (90/10)
-        random.shuffle(seen_only)
-        n_seen = len(seen_only)
-        val_count = max(1, int(n_seen * 0.1))
-        train_examples = seen_only[val_count:]
-        val_examples = seen_only[:val_count]
-
-        # All unseen/mixed go to test
-        test_examples = unseen_or_mixed
-
-        self.train_data = Dataset.from_list(train_examples)
-        self.val_data = Dataset.from_list(val_examples)
-        self.test_data = Dataset.from_list(test_examples)
-
-        n = len(all_examples)
-        print(f"Zero-shot split: {n} sentences -> train={len(train_examples)}, val={len(val_examples)}, test={len(test_examples)}")
-
-    def _zero_shot_entity_split(self, all_examples):
-        """Zero-shot entity split: hold out specific entity instances for test only.
-
-        All entity TYPES are seen during training, but ~30% of unique entity
-        NAMES are held out. This tests whether the model can generalize to
-        recognize unseen entities of known types.
-
-        Split logic:
-        - Sentences where ALL entities are unseen -> test
-        - Sentences where ALL entities are seen -> train/val (90/10)
-        - Sentences with mixed (seen + unseen) entities -> test
-        - Sentences with no entities -> distributed proportionally
-        """
-        import random
-        from collections import Counter
-
-        # Collect all unique entity names with their frequencies
-        entity_counter = Counter()
-        for ex in all_examples:
-            for ent in ex.get('entities', []):
-                name = ent.get('name', '').strip()
-                if name:
-                    entity_counter[name] += 1
-
-        all_entities = sorted(entity_counter.keys())
-        if len(all_entities) < 3:
-            print(f"Warning: Only {len(all_entities)} unique entities, falling back to default split")
-            random.shuffle(all_examples)
-            n = len(all_examples)
-            train_end = int(n * 0.8)
-            val_end = int(n * 0.9)
-            self.train_data = Dataset.from_list(all_examples[:train_end])
-            self.val_data = Dataset.from_list(all_examples[train_end:val_end])
-            self.test_data = Dataset.from_list(all_examples[val_end:])
-            return
-
-        # Hold out ~30% of unique entities as unseen
-        # Prefer holding out less frequent entities (more realistic scenario)
-        sorted_by_freq = sorted(all_entities, key=lambda e: entity_counter[e])
-        n_unseen = max(1, int(len(all_entities) * 0.3))
-        unseen_entities = set(sorted_by_freq[:n_unseen])
-        seen_entities = set(sorted_by_freq[n_unseen:])
-
-        # Print statistics
-        unseen_count = sum(entity_counter[e] for e in unseen_entities)
-        seen_count = sum(entity_counter[e] for e in seen_entities)
-        print(f"Zero-shot entity split: {len(seen_entities)} seen entities ({seen_count} occurrences)")
-        print(f"Zero-shot entity split: {len(unseen_entities)} unseen entities ({unseen_count} occurrences)")
-
-        # Show some examples
-        unseen_sample = sorted(unseen_entities)[:10]
-        seen_sample = sorted(seen_entities, key=lambda e: -entity_counter[e])[:10]
-        print(f"  Unseen examples: {unseen_sample}")
-        print(f"  Seen top entities: {seen_sample}")
-
-        # Categorize sentences
-        seen_only = []       # all entities are seen
-        pure_unseen = []     # all entities are unseen
-        mixed = []           # contains both seen and unseen entities
-        no_entities = []
-
-        for ex in all_examples:
-            ex_entity_names = set()
-            for ent in ex.get('entities', []):
-                name = ent.get('name', '').strip()
-                if name:
-                    ex_entity_names.add(name)
-
-            if not ex_entity_names:
-                no_entities.append(ex)
-            elif ex_entity_names.issubset(seen_entities):
-                seen_only.append(ex)
-            elif ex_entity_names.issubset(unseen_entities):
-                pure_unseen.append(ex)
-            else:
-                mixed.append(ex)
-
-        print(f"  Sentence categories: seen_only={len(seen_only)}, pure_unseen={len(pure_unseen)}, mixed={len(mixed)}, no_entities={len(no_entities)}")
-
-        # Mixed sentences (contain both seen+unseen) go to train to avoid leakage
-        seen_only.extend(mixed)
-
-        # Distribute no-entity sentences proportionally
-        random.shuffle(no_entities)
-        n_no_ent = len(no_entities)
-        n_no_ent_train = int(n_no_ent * 0.7)
-        seen_only.extend(no_entities[:n_no_ent_train])
-        pure_unseen.extend(no_entities[n_no_ent_train:])
-
-        # Split seen_only+mixed into train/val (90/10)
-        random.shuffle(seen_only)
-        n_seen = len(seen_only)
-        val_count = max(1, int(n_seen * 0.1))
-        train_examples = seen_only[val_count:]
-        val_examples = seen_only[:val_count]
-
-        # Only pure unseen sentences go to test
-        test_examples = pure_unseen
-
-        self.train_data = Dataset.from_list(train_examples)
-        self.val_data = Dataset.from_list(val_examples)
-        self.test_data = Dataset.from_list(test_examples)
-
-        n = len(all_examples)
-        print(f"Zero-shot entity split: {n} sentences -> train={len(train_examples)}, val={len(val_examples)}, test={len(test_examples)}")
-
     def _load_dataset(self):
-        """Load dataset from path (supports HuggingFace scripts, saved datasets, and HIPE TSV)"""
+        """Load dataset from path (supports both HuggingFace dataset scripts and saved datasets)"""
         import os
-        import glob as glob_module
-
-        # Check for HIPE TSV format
-        tsv_files = glob_module.glob(os.path.join(self.dataset_path, '**/*.tsv'), recursive=True)
-        if tsv_files:
-            self._convert_tsv_to_dataset(tsv_files)
-            return
 
         # Check if this is a saved dataset (has dataset_dict.json or state.json)
         is_saved_dataset = (
@@ -2964,36 +2403,6 @@ class HistoryDocumentDataset:
 
         if self.train_data is None:
             raise ValueError(f"No training data found in {self.dataset_path}")
-
-    def _detect_entity_types(self):
-        """Auto-detect entity types from loaded dataset.
-
-        Scans all entities in train/val/test splits and collects unique type names.
-        Sets self.entity_types (sorted list) and builds self.label2id / self.id2label.
-        """
-        type_set = set()
-        for split in [self.train_data, self.val_data, self.test_data]:
-            if split is None:
-                continue
-            for example in split:
-                for entity in example.get('entities', []):
-                    etype = entity.get('type', '')
-                    if etype:
-                        type_set.add(etype)
-
-        self.entity_types = sorted(type_set)
-
-        # Build BIO label mappings
-        labels = ["O"]
-        for etype in self.entity_types:
-            labels.append(f"B-{etype}")
-            labels.append(f"I-{etype}")
-
-        self.label2id = {label: i for i, label in enumerate(labels)}
-        self.id2label = {i: label for i, label in enumerate(labels)}
-
-        print(f"Auto-detected {len(self.entity_types)} entity types: {self.entity_types}")
-        print(f"Label count: {len(labels)} (O + {len(self.entity_types)} B/I pairs)")
 
 
 class HistoryDocumentCorpus:
@@ -3472,7 +2881,7 @@ class HistoryDocumentTrainer():
             warmup_steps=5,
             weight_decay=0.01,
             num_train_epochs=num_epochs,
-            eval_strategy="epoch",
+            evaluation_strategy="epoch",
             save_strategy="epoch" if save_model else "no",
             logging_strategy="epoch",
             fp16=True,
@@ -3500,12 +2909,9 @@ class HistoryDocumentTrainer():
         return self.trainer
 
     def train_sequential(self, dataset_paths, epochs_per_dataset, output_base_dir, seed=42,
-                        batch_size=32, learning_rate=1e-5, split_mode="default"):
+                        batch_size=32, learning_rate=1e-5):
         """
-        Train model sequentially on multiple datasets.
-
-        For CRF models, CRF is disabled during pre-training stages and only
-        enabled with fresh transitions for the final stage (real data).
+        Train model sequentially on multiple datasets
 
         Args:
             dataset_paths: List of dataset paths
@@ -3523,62 +2929,16 @@ class HistoryDocumentTrainer():
         if len(dataset_paths) != len(epochs_per_dataset):
             raise ValueError("Number of datasets must match number of epoch specifications")
 
-        # Detect CRF: save full model, use base_model for pre-training stages
-        model = self.model_wrapper.model
-        crf_model = None
-        if hasattr(model, 'crf') and hasattr(model, 'base_model'):
-            crf_model = model
-
         results = []
 
         for stage_idx, (dataset_path, num_epochs) in enumerate(zip(dataset_paths, epochs_per_dataset)):
-            is_last_stage = (stage_idx == len(dataset_paths) - 1)
-
-            if crf_model is not None:
-                if not is_last_stage:
-                    print(f"[CRF] Pre-training stage: using base model only (CRF disabled)")
-                    self.model_wrapper.model = crf_model.base_model
-                else:
-                    print(f"[CRF] Final stage: CRF enabled with fresh transitions")
-                    st, t, et = create_crf_transitions(crf_model.label2id)
-                    crf_model.crf.start_transitions.data = st
-                    crf_model.crf.transitions.data = t
-                    crf_model.crf.end_transitions.data = et
-                    self.model_wrapper.model = crf_model
-
-            # Re-enable gradients between stages (accelerator may disable them)
-            if stage_idx > 0:
-                current_model = self.model_wrapper.model
-                current_model.train()
-                # Re-enable gradients for trainable parameters
-                trainable_count = sum(1 for p in current_model.parameters() if p.requires_grad)
-                if trainable_count == 0:
-                    print(f"[Sequential] Re-enabling gradients for trainable parameters...")
-                    # Try PeftModel's enable method first
-                    if hasattr(current_model, 'enable_adapter_layers'):
-                        current_model.enable_adapter_layers()
-                    # Fallback: re-enable by name pattern
-                    for name, param in current_model.named_parameters():
-                        if any(k in name for k in ['lora_', 'classifier', 'score', 'head']):
-                            param.requires_grad = True
-                    trainable_count = sum(1 for p in current_model.parameters() if p.requires_grad)
-                trainable_params = sum(p.numel() for p in current_model.parameters() if p.requires_grad)
-                print(f"[Sequential] Stage {stage_idx + 1}: {trainable_count} trainable tensors ({trainable_params:,} params)")
-
-                # Free previous trainer to avoid accelerator conflicts
-                if hasattr(self, 'trainer') and self.trainer is not None:
-                    del self.trainer
-                    self.trainer = None
-                    import gc; gc.collect()
-                    import torch; torch.cuda.empty_cache()
-
             print(f"\n{'='*60}")
             print(f"Stage {stage_idx + 1}/{len(dataset_paths)}: Training on {dataset_path}")
             print(f"Epochs: {num_epochs}")
             print(f"{'='*60}\n")
 
             # Load dataset
-            dataset = HistoryDocumentDataset(dataset_path, split_mode=split_mode)
+            dataset = HistoryDocumentDataset(dataset_path)
 
             # Create stage output directory
             stage_dir = Path(output_base_dir) / f"stage{stage_idx + 1}"
@@ -3755,7 +3115,7 @@ class HistoryDocumentTrainer():
             }
 
             # Set sample counts (from last stage dataset)
-            final_dataset = HistoryDocumentDataset(last_stage["dataset"], split_mode=split_mode)
+            final_dataset = HistoryDocumentDataset(last_stage["dataset"])
             final_result.num_train_samples = len(final_dataset.train_data) if final_dataset.train_data else 0
             final_result.num_val_samples = len(final_dataset.val_data) if final_dataset.val_data else 0
             final_result.num_test_samples = len(final_dataset.test_data) if final_dataset.test_data else 0
@@ -3925,7 +3285,7 @@ class HistoryDocumentTrainer():
             weight_decay=0.01,
             warmup_ratio=warmup_ratio,
             lr_scheduler_type="linear",
-            eval_strategy="epoch",
+            evaluation_strategy="epoch",
             save_strategy="epoch",
             logging_strategy="steps",
             logging_steps=100,
@@ -4335,16 +3695,15 @@ class HistoryDocumentTrainerLLaMA(HistoryDocumentTrainerLocalLLM):
     """LLaMA-specific trainer implementation for NER tasks
 
     Implements generative NER using prompts and JSON output format.
-    Supports both NeMo (PyTorch Lightning) and HuggingFace training backends.
     """
 
     def train(self, dataset: HistoryDocumentDataset, output_dir, seed=42, num_epochs=20,
               batch_size=32, learning_rate=1e-5, resume_from_checkpoint=None, save_model=True):
         """
-        Train LLaMA model on dataset
+        Train LLaMA model on dataset (overrides base class to disable compute_metrics)
 
-        Uses NeMo's PyTorch Lightning trainer if available, otherwise falls back to HuggingFace.
         LLaMA uses generative NER, so standard token-classification metrics don't apply.
+        Evaluation should be done separately using generate() and entity parsing.
 
         Args:
             dataset: HistoryDocumentDataset instance
@@ -4361,106 +3720,6 @@ class HistoryDocumentTrainerLLaMA(HistoryDocumentTrainerLocalLLM):
         """
         set_seed(seed)
 
-        # Check if model is using NeMo backend
-        if hasattr(self.model_wrapper, '_use_nemo') and self.model_wrapper._use_nemo:
-            return self._train_nemo(dataset, output_dir, seed, num_epochs, batch_size,
-                                   learning_rate, resume_from_checkpoint, save_model)
-        else:
-            return self._train_huggingface(dataset, output_dir, seed, num_epochs, batch_size,
-                                          learning_rate, resume_from_checkpoint, save_model)
-
-    def _train_nemo(self, dataset, output_dir, seed, num_epochs, batch_size,
-                   learning_rate, resume_from_checkpoint, save_model):
-        """Train using NVIDIA NeMo's PyTorch Lightning trainer"""
-        try:
-            import pytorch_lightning as pl
-            from pytorch_lightning.callbacks import ModelCheckpoint
-            from nemo import lightning as nl
-        except ImportError:
-            print("NeMo training dependencies not available, falling back to HuggingFace...")
-            return self._train_huggingface(dataset, output_dir, seed, num_epochs, batch_size,
-                                          learning_rate, resume_from_checkpoint, save_model)
-
-        print(f"Training with NeMo PyTorch Lightning backend...")
-
-        # Prepare data for NeMo
-        train_data = list(dataset.train_data)
-        val_data = list(dataset.val_data) if dataset.val_data else None
-
-        # Create NeMo data module
-        from torch.utils.data import DataLoader, Dataset as TorchDataset
-
-        class NERDataset(TorchDataset):
-            def __init__(self, data, tokenizer, format_prompt_fn, max_length=512):
-                self.data = data
-                self.tokenizer = tokenizer
-                self.format_prompt = format_prompt_fn
-                self.max_length = max_length
-
-            def __len__(self):
-                return len(self.data)
-
-            def __getitem__(self, idx):
-                item = self.data[idx]
-                text = item.get('text', '')
-                entities = item.get('entities', [])
-                prompt = self.format_prompt(text, entities, is_training=True)
-
-                tokenized = self.tokenizer(
-                    prompt,
-                    max_length=self.max_length,
-                    truncation=True,
-                    padding="max_length",
-                    return_tensors="pt"
-                )
-                return {k: v.squeeze(0) for k, v in tokenized.items()}
-
-        train_dataset = NERDataset(train_data, self.model_wrapper.tokenizer, self.format_ner_prompt)
-        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-
-        val_dataloader = None
-        if val_data:
-            val_dataset = NERDataset(val_data, self.model_wrapper.tokenizer, self.format_ner_prompt)
-            val_dataloader = DataLoader(val_dataset, batch_size=batch_size)
-
-        # Configure callbacks
-        callbacks = []
-        if save_model:
-            checkpoint_callback = ModelCheckpoint(
-                dirpath=output_dir,
-                filename='nemo-llama-{epoch:02d}',
-                save_top_k=1,
-                monitor='train_loss',
-                mode='min',
-            )
-            callbacks.append(checkpoint_callback)
-
-        # Configure trainer
-        trainer = pl.Trainer(
-            max_epochs=num_epochs,
-            accelerator='gpu' if torch.cuda.is_available() else 'cpu',
-            devices=1,
-            precision='16-mixed',
-            default_root_dir=output_dir,
-            callbacks=callbacks,
-            enable_progress_bar=True,
-            logger=True,
-        )
-
-        # Train
-        trainer.fit(
-            self.model_wrapper.nemo_model,
-            train_dataloaders=train_dataloader,
-            val_dataloaders=val_dataloader,
-        )
-
-        self.trainer = trainer
-        print(f"✅ NeMo training completed!")
-        return trainer
-
-    def _train_huggingface(self, dataset, output_dir, seed, num_epochs, batch_size,
-                          learning_rate, resume_from_checkpoint, save_model):
-        """Train using HuggingFace Trainer (fallback)"""
         # Tokenize datasets
         train_tokenized = dataset.train_data.map(
             lambda x: self.tokenize_and_align_labels(x),
@@ -4474,29 +3733,31 @@ class HistoryDocumentTrainerLLaMA(HistoryDocumentTrainerLocalLLM):
         )
 
         # LLaMA uses generative NER - disable compute_metrics during training
+        # (standard token classification metrics don't work for generative models)
         self.compute_metrics_fn = None
 
-        # Training arguments
+        # Training arguments (no compute_metrics for generative models)
         training_args = TrainingArguments(
             output_dir=output_dir,
             per_device_train_batch_size=batch_size,
-            per_device_eval_batch_size=1,
+            per_device_eval_batch_size=batch_size,
             learning_rate=learning_rate,
             lr_scheduler_type="linear",
             warmup_ratio=0.1,
             warmup_steps=5,
             weight_decay=0.01,
             num_train_epochs=num_epochs,
-            eval_strategy="no",
+            evaluation_strategy="no",  # Disable eval during training for generative models
             save_strategy="epoch" if save_model else "no",
             logging_strategy="epoch",
             fp16=True,
             save_total_limit=1 if save_model else None,
-            load_best_model_at_end=False,
-            eval_accumulation_steps=1,
+            load_best_model_at_end=False,  # No eval metrics to compare
+            # Memory optimization
+            eval_accumulation_steps=4,
         )
 
-        # Initialize Trainer
+        # Initialize Trainer without compute_metrics
         self.trainer = Trainer(
             model=self.model_wrapper.model,
             tokenizer=self.model_wrapper.tokenizer,
@@ -4504,7 +3765,7 @@ class HistoryDocumentTrainerLLaMA(HistoryDocumentTrainerLocalLLM):
             eval_dataset=val_tokenized,
             data_collator=self.model_wrapper.data_collator,
             args=training_args,
-            compute_metrics=None,
+            compute_metrics=None,  # Disabled for generative models
         )
 
         # Train
@@ -4582,8 +3843,14 @@ class HistoryDocumentTrainerLLaMA(HistoryDocumentTrainerLocalLLM):
         # Format prompt with answer
         prompt = self.format_ner_prompt(text, entities, is_training=True)
 
-        # Use a reasonable max length for NER tasks (model may support 128K+ but that's wasteful)
-        max_length = 512
+        # Get max length from model config (respecting position embedding limits)
+        model_config = self.model_wrapper.model.config
+        if hasattr(model_config, 'n_positions'):
+            max_length = model_config.n_positions  # GPT-2 style
+        elif hasattr(model_config, 'max_position_embeddings'):
+            max_length = model_config.max_position_embeddings  # LLaMA style
+        else:
+            max_length = 512  # Safe default
 
         # Tokenize
         tokenized_inputs = self.model_wrapper.tokenizer(
@@ -4850,19 +4117,12 @@ def main():
 
     # Label arguments
     parser.add_argument("--entity-types", type=str,
-                       default="auto",
-                       help="Comma-separated entity types, or 'auto' to detect from dataset (default: auto)")
+                       default="役者,演目名,屋号,俳名,役名,興行関係者,狂言作者,書名,人名,音曲,事項",
+                       help="Comma-separated entity types")
 
     # Model architecture arguments
     parser.add_argument("--use-crf", action="store_true",
                        help="Use CRF layer on top of BERT for better sequence labeling")
-    parser.add_argument("--use-transformer-crf", action="store_true",
-                       help="Use BERT + 2-Layer Transformer Encoder + CRF architecture")
-
-    # Dataset split mode
-    parser.add_argument("--split-mode", type=str, default="default",
-                       choices=["default", "zero_shot", "zero_shot_entity"],
-                       help="Dataset split strategy: 'default' (80/10/10), 'zero_shot' (split by entity types), or 'zero_shot_entity' (split by entity instances)")
 
     # LoRA arguments (for LLaMA models)
     parser.add_argument("--use-lora", action="store_true",
@@ -4915,24 +4175,15 @@ def main():
     if len(dataset_paths) != len(epochs_per_dataset):
         raise ValueError(f"Number of datasets ({len(dataset_paths)}) must match number of epoch specifications ({len(epochs_per_dataset)})")
 
-    # Load first dataset early to support auto entity type detection
-    first_dataset = HistoryDocumentDataset(dataset_paths[0], split_mode=args.split_mode)
-
     # Create label mappings
-    if args.entity_types == "auto":
-        # Use entity types auto-detected from dataset
-        label2id = first_dataset.label2id
-        id2label = first_dataset.id2label
-        entity_types = first_dataset.entity_types
-        print(f"Using auto-detected entity types from dataset")
-    else:
-        entity_types = [e.strip() for e in args.entity_types.split(',')]
-        labels = ["O"]
-        for entity_type in entity_types:
-            labels.append(f"B-{entity_type}")
-            labels.append(f"I-{entity_type}")
-        label2id = {label: i for i, label in enumerate(labels)}
-        id2label = {i: label for i, label in enumerate(labels)}
+    entity_types = [e.strip() for e in args.entity_types.split(',')]
+    labels = ["O"]
+    for entity_type in entity_types:
+        labels.append(f"B-{entity_type}")
+        labels.append(f"I-{entity_type}")
+
+    label2id = {label: i for i, label in enumerate(labels)}
+    id2label = {i: label for i, label in enumerate(labels)}
 
     # Determine model type
     model_name_lower = args.model.lower()
@@ -4980,15 +4231,13 @@ def main():
 
     print(f"Model Type: {model_type_str}")
     print(f"Use CRF: {args.use_crf}")
-    print(f"Use Transformer+CRF: {args.use_transformer_crf}")
-    print(f"Split mode: {args.split_mode}")
     print(f"Datasets: {dataset_paths}")
     print(f"Epochs per dataset: {epochs_per_dataset}")
     print(f"Output directory: {args.output_dir}")
     print(f"Batch size: {args.batch_size}")
     print(f"Learning rate: {learning_rate}")
     print(f"Seed: {args.seed}")
-    print(f"Number of labels: {len(label2id)}")
+    print(f"Number of labels: {len(labels)}")
     print(f"{'='*60}\n")
 
     # Initialize model wrapper based on model type
@@ -5007,11 +4256,8 @@ def main():
         trainer = HistoryDocumentTrainerBiLSTM(model=model_wrapper)
     elif is_remote_llm:
         # Remote LLM models (ChatGPT, Claude API)
-        # Reuse the dataset loaded earlier for auto entity type detection
-        dataset = first_dataset
-
-        dataset_lang = HistoryDocumentModelLLM._detect_lang_from_path(dataset_paths[0])
-        print(f"Detected prompt language: {dataset_lang}")
+        # Load dataset first for Remote LLM (needed for trainer initialization)
+        dataset = HistoryDocumentDataset(dataset_paths[0])
 
         if remote_llm_provider == 'chatgpt':
             model_wrapper = HistoryDocumentModelRemoteLLMChatGPT(
@@ -5019,7 +4265,6 @@ def main():
                 label2id=label2id,
                 id2label=id2label,
                 temperature=0.0,
-                dataset_lang=dataset_lang,
             )
             trainer = HistoryDocumentTrainerRemoteLLMChatGPT(
                 model=model_wrapper,
@@ -5033,7 +4278,6 @@ def main():
                 label2id=label2id,
                 id2label=id2label,
                 temperature=0.0,
-                dataset_lang=dataset_lang,
             )
             trainer = HistoryDocumentTrainerRemoteLLMClaude(
                 model=model_wrapper,
@@ -5062,8 +4306,7 @@ def main():
             model_name=args.model,
             label2id=label2id,
             id2label=id2label,
-            use_crf=args.use_crf,
-            use_transformer_crf=args.use_transformer_crf,
+            use_crf=args.use_crf
         )
         trainer = HistoryDocumentTrainerBERT(model=model_wrapper)
 
@@ -5165,8 +4408,8 @@ def main():
         # Single dataset training
         print("Running single-dataset training\n")
 
-        # Reuse the dataset loaded earlier for auto entity type detection
-        dataset = first_dataset
+        # Load dataset
+        dataset = HistoryDocumentDataset(dataset_paths[0])
 
         # Record start time
         start_time = datetime.now()
@@ -5203,8 +4446,6 @@ def main():
             "learning_rate": learning_rate,
             "seed": args.seed,
             "use_crf": args.use_crf,
-            "use_transformer_crf": args.use_transformer_crf,
-            "split_mode": args.split_mode,
         }
 
         result = trainer.evaluate_and_create_result(
@@ -5234,8 +4475,7 @@ def main():
             output_base_dir=str(output_dir),
             seed=args.seed,
             batch_size=args.batch_size,
-            learning_rate=learning_rate,
-            split_mode=args.split_mode
+            learning_rate=learning_rate
         )
 
     print(f"\nTraining completed successfully!")
@@ -5538,13 +4778,6 @@ class HistoryDocumentModelRemoteLLMChatGPT(HistoryDocumentModelRemoteLLM):
         except ImportError:
             raise ImportError("OpenAI package is required. Install with: pip install openai")
 
-    SYSTEM_MESSAGES = {
-        "ja": "あなたは日本語の歴史文書（浮世絵・歌舞伎関連）の固有表現認識の専門家です。指示に従ってJSON形式で回答してください。",
-        "de": "Du bist ein Experte für Named Entity Recognition in historischen Zeitungstexten des 17.–19. Jahrhunderts. Der Text kann OCR-Fehler, veraltete Schreibweisen und Frakturschrift enthalten. Antworte im JSON-Format gemäß den Anweisungen.",
-        "fr": "Vous êtes un expert en reconnaissance d'entités nommées dans des textes de presse historiques du XVIIe au XIXe siècle. Le texte peut contenir des erreurs d'OCR et des orthographes anciennes. Répondez au format JSON selon les instructions.",
-        "en": "You are an expert in Named Entity Recognition for historical newspaper texts from the 17th–19th century. The text may contain OCR errors and archaic spelling. Follow the instructions and respond in JSON format.",
-    }
-
     def _call_api(self, prompt: str) -> str:
         """Call OpenAI API
 
@@ -5554,7 +4787,8 @@ class HistoryDocumentModelRemoteLLMChatGPT(HistoryDocumentModelRemoteLLM):
         Returns:
             Response text from ChatGPT
         """
-        system_msg = self.SYSTEM_MESSAGES.get(self.dataset_lang, self.SYSTEM_MESSAGES["en"])
+        # Use system message for task context and user message for prompt
+        system_msg = "あなたは日本語の歴史文書（浮世絵・歌舞伎関連）の固有表現認識の専門家です。指示に従ってJSON形式で回答してください。"
 
         response = self.client.chat.completions.create(
             model=self.model_name,
@@ -5607,8 +4841,6 @@ class HistoryDocumentModelRemoteLLMClaude(HistoryDocumentModelRemoteLLM):
         except ImportError:
             raise ImportError("Anthropic package is required. Install with: pip install anthropic")
 
-    SYSTEM_MESSAGES = HistoryDocumentModelRemoteLLMChatGPT.SYSTEM_MESSAGES
-
     def _call_api(self, prompt: str) -> str:
         """Call Anthropic API
 
@@ -5618,7 +4850,8 @@ class HistoryDocumentModelRemoteLLMClaude(HistoryDocumentModelRemoteLLM):
         Returns:
             Response text from Claude
         """
-        system_msg = self.SYSTEM_MESSAGES.get(self.dataset_lang, self.SYSTEM_MESSAGES["en"])
+        # Use system message for task context
+        system_msg = "あなたは日本語の歴史文書（浮世絵・歌舞伎関連）の固有表現認識の専門家です。指示に従ってJSON形式で回答してください。"
 
         response = self.client.messages.create(
             model=self.model_name,
