@@ -1,0 +1,41 @@
+{
+  "experiment_name": "llama_1b_test",
+  "description": "LLaMA 1B NER test with 100 samples, 1 epoch",
+  "models": [
+    {
+      "name": "llama-1b",
+      "model_id": "llama_1b_lora",
+      "use_lora": true,
+      "use_4bit": true
+    }
+  ],
+  "data": {
+    "datasets": [
+      "dataset/yakusha_annotated_data_few-shot"
+    ],
+    "epochs": [
+      1
+    ],
+    "max_samples": 100
+  },
+  "training": {
+    "batch_size": 4,
+    "learning_rate": 2e-04,
+    "seed": 42
+  },
+  "mlm_pretrain": {
+    "enabled": false
+  },
+  "output": {
+    "dir": "experiments/llama_1b_test_${timestamp}",
+    "save_model": true
+  },
+  "advanced": {
+    "run_in_background": false,
+    "log_file": "logs/llama_1b_test.log"
+  },
+  "evaluation": {
+    "enabled": true,
+    "output_dir": "experiments/llama_1b_test_${timestamp}/evaluation_report"
+  }
+}

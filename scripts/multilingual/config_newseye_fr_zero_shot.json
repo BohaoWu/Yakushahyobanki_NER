@@ -1,0 +1,55 @@
+{
+  "experiment_name": "newseye_fr_zero_shot",
+  "description": "French NewsEye NER zero-shot entity: French BERT + mBERT, one-stage (20ep)",
+  "models": [
+    {
+      "name": "bert-french",
+      "model_id": "bert_french",
+      "use_crf": false
+    },
+    {
+      "name": "bert-french",
+      "model_id": "bert_french_crf",
+      "use_crf": true
+    },
+    {
+      "name": "bert-multilingual",
+      "model_id": "bert_multilingual",
+      "use_crf": false
+    },
+    {
+      "name": "bert-multilingual",
+      "model_id": "bert_multilingual_crf",
+      "use_crf": true
+    }
+  ],
+  "data": {
+    "datasets": [
+      "dataset/Newseye/fr"
+    ],
+    "epochs": [
+      20
+    ],
+    "split_mode": "zero_shot_entity"
+  },
+  "training": {
+    "batch_size": 32,
+    "learning_rate": 2e-05,
+    "seed": 42
+  },
+  "mlm_pretrain": {
+    "enabled": false
+  },
+  "output": {
+    "dir": "experiments/newseye_fr_zero_shot_${timestamp}",
+    "save_model": true
+  },
+  "advanced": {
+    "run_in_background": false,
+    "log_file": "logs/newseye_fr_zero_shot.log"
+  },
+  "evaluation": {
+    "enabled": true,
+    "output_dir": "experiments/newseye_fr_zero_shot_${timestamp}/evaluation_report"
+  }
+}

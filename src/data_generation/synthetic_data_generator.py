@@ -771,7 +771,8 @@ def create_balanced_dataset(
     target_samples: int = 2000,
     api_key: Optional[str] = None,
     model: str = "gpt-4",
-    num_workers: int = 10
+    num_workers: int = 10,
+    lang: str = "ja"
 ) -> NERSyntheticDataDataset:
     """
     Convenience function: One-click balanced dataset generation
@@ -795,7 +796,8 @@ def create_balanced_dataset(
     # 2. Initialize model
     gen_model = NERSyntheticDataModel(
         api_key=api_key,
-        model=model
+        model=model,
+        lang=lang
     )
 
     # 3. Create generator
@@ -826,7 +828,8 @@ def create_uniform_multi_dataset(
     api_key: Optional[str] = None,
     model: str = "gpt-4o-mini",
     num_workers: int = 10,
-    provider: str = "openai"
+    provider: str = "openai",
+    lang: str = "ja"
 ) -> NERSyntheticDataDataset:
     """
     Convenience function: Type-level uniform sampling + multi-entity generation
@@ -860,7 +863,8 @@ def create_uniform_multi_dataset(
     gen_model = NERSyntheticDataModel(
         api_key=api_key,
         model=model,
-        provider=provider
+        provider=provider,
+        lang=lang
     )
 
     # 3. Create generator
@@ -892,7 +896,8 @@ def create_topn_dataset(
     api_key: Optional[str] = None,
     model: str = "gpt-4",
     num_workers: int = 10,
-    provider: str = "openai"
+    provider: str = "openai",
+    lang: str = "ja"
 ) -> NERSyntheticDataDataset:
     """
     Convenience function: Generate dataset based on global Top-N entities
@@ -921,7 +926,8 @@ def create_topn_dataset(
     gen_model = NERSyntheticDataModel(
         api_key=api_key,
         model=model,
-        provider=provider
+        provider=provider,
+        lang=lang
     )
 
     # 3. Create generator

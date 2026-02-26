@@ -110,12 +110,26 @@ Evaluate ChatGPT and Claude directly on the test set:
 | `deberta` | ku-nlp/deberta-v2-base-japanese | Transformer |
 | `deberta-large` | ku-nlp/deberta-v2-large-japanese | Transformer |
 | `bilstm` | BiLSTM | Sequential |
-| `rinna-3.6b` | rinna/japanese-gpt-neox-3.6b | LLaMA (LoRA) |
-| `rinna-1.3b` | rinna/japanese-gpt-1b | LLaMA (LoRA) |
+| `llama-1b` | meta-llama/Llama-3.2-1B | LLaMA (NeMo) |
+| `llama-3b` | meta-llama/Llama-3.2-3B | LLaMA (NeMo) |
 
 Remote LLMs (inference only): `gpt-4o-mini` (ChatGPT), `claude-3-haiku-20240307` (Claude)
 
 Optional model parameters: `use_crf` (BERT family), `use_lora` / `use_4bit` (LLaMA).
+
+### LLaMA Models (NeMo Backend)
+
+LLaMA models use NVIDIA NeMo framework for faster training and inference. NeMo provides:
+- Optimized model loading and inference
+- PyTorch Lightning-based training
+- Automatic fallback to HuggingFace if NeMo is not available
+
+**Requirements for LLaMA models:**
+```bash
+pip install nemo_toolkit[nlp] pytorch-lightning megatron-core
+```
+
+**Note:** Meta LLaMA models require approval from Meta on HuggingFace. Visit https://huggingface.co/meta-llama to request access.
 
 ## GPU Auto-Scheduling
 
