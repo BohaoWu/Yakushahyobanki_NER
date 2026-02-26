@@ -1,0 +1,43 @@
+{
+  "experiment_name": "llama_8b_ja_two_stage",
+  "description": "LLaMA 3.1 8B two-stage NER: 1) synthetic data pretrain 2) few-shot fine-tune",
+  "models": [
+    {
+      "name": "meta-llama/Llama-3.1-8B",
+      "model_id": "llama_8b_lora",
+      "use_lora": true,
+      "use_4bit": true,
+      "lora_r": 16,
+      "lora_alpha": 32
+    }
+  ],
+  "data": {
+    "datasets": [
+      "dataset/yakusha_synthetic_ner_dataset_chatgpt_N_20",
+      "dataset/yakusha_annotated_data_few-shot"
+    ],
+    "epochs": [
+      5,
+      10
+    ]
+  },
+  "training": {
+    "batch_size": 4,
+    "learning_rate": 2e-04,
+    "seed": 42
+  },
+  "mlm_pretrain": {
+    "enabled": false
+  },
+  "output": {
+    "dir": "experiments/llama_8b_ja_two_stage_${timestamp}",
+    "save_model": true
+  },
+  "advanced": {
+    "run_in_background": false,
+    "log_file": "logs/llama_8b_ja_two_stage.log"
+  },
+  "evaluation": {
+    "enabled": false
+  }
+}

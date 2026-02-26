@@ -1,0 +1,47 @@
+{
+  "experiment_name": "newseye_de_german_bert_two_stage_zero_shot",
+  "description": "German BERT two-stage zero-shot: synthetic pretrain (10ep) + real fine-tune (20ep)",
+  "models": [
+    {
+      "name": "bert-german",
+      "model_id": "bert_german",
+      "use_crf": false
+    },
+    {
+      "name": "bert-german",
+      "model_id": "bert_german_crf",
+      "use_crf": true
+    }
+  ],
+  "data": {
+    "datasets": [
+      "dataset/newseye_synthetic_ner_dataset_chatgpt_N_20",
+      "dataset/Newseye/de"
+    ],
+    "epochs": [
+      10,
+      20
+    ],
+    "split_mode": "zero_shot_entity"
+  },
+  "training": {
+    "batch_size": 32,
+    "learning_rate": 2e-05,
+    "seed": 42
+  },
+  "mlm_pretrain": {
+    "enabled": false
+  },
+  "output": {
+    "dir": "experiments/newseye_de_german_bert_two_stage_zero_shot_${timestamp}",
+    "save_model": true
+  },
+  "advanced": {
+    "run_in_background": false,
+    "log_file": "logs/newseye_de_german_bert_two_stage_zero_shot.log"
+  },
+  "evaluation": {
+    "enabled": true,
+    "output_dir": "experiments/newseye_de_german_bert_two_stage_zero_shot_${timestamp}/evaluation_report"
+  }
+}
