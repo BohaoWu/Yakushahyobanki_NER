@@ -142,8 +142,14 @@ Examples:
     parser.add_argument(
         '--lang',
         default='ja',
-        choices=['ja', 'de', 'fr', 'en'],
-        help='Target language for prompt generation (default: ja)'
+        choices=['ja', 'ja_minna', 'de', 'fr', 'en'],
+        help='Target language/domain for prompt generation (default: ja). Use ja_minna for Edo earthquake records.'
+    )
+
+    parser.add_argument(
+        '--use-batch',
+        action='store_true',
+        help='Use Claude Message Batches API (bypasses rate limits, 50%% cheaper, only with --provider claude)'
     )
 
     args = parser.parse_args()
@@ -204,7 +210,8 @@ Examples:
             model=args.model,
             num_workers=args.workers,
             provider=args.provider,
-            lang=args.lang
+            lang=args.lang,
+            use_batch=args.use_batch,
         )
     elif use_topn_mode:
         dataset = create_topn_dataset(

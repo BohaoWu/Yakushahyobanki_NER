@@ -1,0 +1,38 @@
+{
+  "experiment_name": "minna_direct",
+  "description": "Minna direct training: 7 models (no CRF), max 50 epochs with early stopping (patience=5)",
+  "models": [
+    { "name": "bert", "model_id": "bert", "use_crf": false },
+    { "name": "bert-large", "model_id": "bert_large", "use_crf": false },
+    { "name": "roberta", "model_id": "roberta", "use_crf": false },
+    { "name": "luke", "model_id": "luke", "use_crf": false },
+    { "name": "albert", "model_id": "albert", "use_crf": false },
+    { "name": "deberta", "model_id": "deberta", "use_crf": false },
+    { "name": "bilstm", "model_id": "bilstm", "use_crf": false }
+  ],
+  "data": {
+    "datasets": ["dataset/minna"],
+    "epochs": [50]
+  },
+  "training": {
+    "batch_size": 32,
+    "learning_rate": 2e-05,
+    "seed": 42,
+    "early_stopping_patience": 5
+  },
+  "mlm_pretrain": {
+    "enabled": false
+  },
+  "output": {
+    "dir": "experiments/minna_direct_${timestamp}",
+    "save_model": false
+  },
+  "advanced": {
+    "run_in_background": false,
+    "log_file": "logs/minna_direct.log"
+  },
+  "evaluation": {
+    "enabled": true,
+    "output_dir": "experiments/minna_direct_${timestamp}/evaluation_report"
+  }
+}

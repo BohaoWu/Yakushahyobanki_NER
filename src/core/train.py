@@ -65,7 +65,7 @@ from transformers import (
     BertForTokenClassification,
     PretrainedConfig,
 )
-from transformers import Trainer, TrainingArguments
+from transformers import Trainer, TrainingArguments, EarlyStoppingCallback
 from transformers.trainer_utils import set_seed
 from datasets import Dataset, load_dataset, load_from_disk, DatasetDict
 from seqeval.metrics import classification_report, f1_score, precision_score, recall_score, accuracy_score
@@ -3426,12 +3426,14 @@ class HistoryDocumentTrainer():
         return result
 
     def train(self, dataset: HistoryDocumentDataset, output_dir, seed=42, num_epochs=20,
-              batch_size=32, learning_rate=1e-5, resume_from_checkpoint=None, save_model=True):
+              batch_size=32, learning_rate=1e-5, resume_from_checkpoint=None, save_model=True,
+              early_stopping_patience=0):
         """
         Train model on dataset
 
         Args:
             dataset: HistoryDocumentDataset instance
+            early_stopping_patience: Stop training if eval F1 doesn't improve for N epochs (0 = disabled)
             output_dir: Output directory
             seed: Random seed
             num_epochs: Number of training epochs
@@ -3461,6 +3463,10 @@ class HistoryDocumentTrainer():
         if self.model_wrapper.id2label:
             self.compute_metrics_fn = self.create_compute_metrics(self.model_wrapper.id2label)
 
+        # Enable early stopping requires load_best_model_at_end=True
+        use_early_stopping = early_stopping_patience > 0 and self.compute_metrics_fn is not None
+        load_best = save_model or use_early_stopping
+
         # Initialize training arguments to pass to Trainer
         training_args = TrainingArguments(
             output_dir=output_dir,
@@ -3473,15 +3479,22 @@ class HistoryDocumentTrainer():
             weight_decay=0.01,
             num_train_epochs=num_epochs,
             eval_strategy="epoch",
-            save_strategy="epoch" if save_model else "no",
+            save_strategy="epoch" if (save_model or use_early_stopping) else "no",
             logging_strategy="epoch",
             fp16=True,
-            save_total_limit=1 if save_model else None,
-            load_best_model_at_end=save_model,
-            metric_for_best_model="f1" if self.compute_metrics_fn and save_model else None,
+            save_total_limit=1 if (save_model or use_early_stopping) else None,
+            load_best_model_at_end=load_best,
+            metric_for_best_model="f1" if (self.compute_metrics_fn and load_best) else None,
+            greater_is_better=True if (self.compute_metrics_fn and load_best) else None,
             # Memory optimization for evaluation
             eval_accumulation_steps=4,
         )
+
+        # Build callbacks list
+        callbacks = []
+        if use_early_stopping:
+            callbacks.append(EarlyStoppingCallback(early_stopping_patience=early_stopping_patience))
+            print(f"  Early stopping enabled (patience={early_stopping_patience} epochs)")
 
         # Initialize the Trainer
         self.trainer = Trainer(
@@ -3492,6 +3505,7 @@ class HistoryDocumentTrainer():
             data_collator=self.model_wrapper.data_collator,
             args=training_args,
             compute_metrics=self.compute_metrics_fn,
+            callbacks=callbacks if callbacks else None,
         )
 
         # Train
@@ -3500,7 +3514,8 @@ class HistoryDocumentTrainer():
         return self.trainer
 
     def train_sequential(self, dataset_paths, epochs_per_dataset, output_base_dir, seed=42,
-                        batch_size=32, learning_rate=1e-5, split_mode="default"):
+                        batch_size=32, learning_rate=1e-5, split_mode="default",
+                        early_stopping_patience=0):
         """
         Train model sequentially on multiple datasets.
 
@@ -3595,7 +3610,8 @@ class HistoryDocumentTrainer():
                 num_epochs=num_epochs,
                 batch_size=batch_size,
                 learning_rate=learning_rate,
-                resume_from_checkpoint=None
+                resume_from_checkpoint=None,
+                early_stopping_patience=early_stopping_patience,
             )
 
             stage_training_time = time.time() - train_start_time
@@ -4896,6 +4912,10 @@ def main():
     parser.add_argument("--no-save-model", action="store_true",
                        help="Do not save the trained model (only save results)")
 
+    # Early stopping
+    parser.add_argument("--early-stopping-patience", type=int, default=0,
+                       help="Stop training if eval F1 doesn't improve for N consecutive epochs (0 = disabled)")
+
     # Remote LLM arguments (for ChatGPT, Claude)
     parser.add_argument("--n-few-shot", type=int, default=5,
                        help="Number of few-shot examples for remote LLM (default: 5)")
@@ -5179,7 +5199,8 @@ def main():
             num_epochs=epochs_per_dataset[0],
             batch_size=args.batch_size,
             learning_rate=learning_rate,
-            save_model=not args.no_save_model
+            save_model=not args.no_save_model,
+            early_stopping_patience=args.early_stopping_patience,
         )
 
         # Calculate training time
@@ -5235,7 +5256,8 @@ def main():
             seed=args.seed,
             batch_size=args.batch_size,
             learning_rate=learning_rate,
-            split_mode=args.split_mode
+            split_mode=args.split_mode,
+            early_stopping_patience=args.early_stopping_patience,
         )
 
     print(f"\nTraining completed successfully!")

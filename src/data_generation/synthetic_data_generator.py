@@ -455,7 +455,8 @@ class NERSyntheticDataGenerator:
         entities_per_sample: int = 3,
         num_workers: int = 10,
         top_n: Optional[int] = None,
-        output_filename: str = "generated_ner_uniform_multi.json"
+        output_filename: str = "generated_ner_uniform_multi.json",
+        use_batch: bool = False,
     ) -> NERSyntheticDataDataset:
         """
         Type-level uniform sampling + multi-entity generation
@@ -596,6 +597,65 @@ class NERSyntheticDataGenerator:
         dataset = NERSyntheticDataDataset()
         total_generated = 0
         total_failed = 0
+
+        # ----- Claude Batch API path -----
+        if use_batch:
+            if self.model.provider != "claude":
+                raise ValueError("use_batch requires provider='claude'")
+
+            print(f"\n[Batch mode] Using Claude Message Batches API ({len(tasks)} requests)")
+            target_entities_list = [[e[0] for e in task] for task in tasks]
+            samples = self.model.batch_generate_with_claude(
+                self.corpus, target_entities_list
+            )
+
+            # Identify failed tasks for retry
+            failed_tasks = []
+            for task, sample in zip(tasks, samples):
+                if sample is not None:
+                    dataset.add_sample(sample)
+                    total_generated += 1
+                    entity_count = len(sample.entities)
+                    if total_generated % 100 == 0:
+                        print(f"  [{total_generated}/{len(tasks)}] OK "
+                              f"{entity_count} entities: {sample.text[:40]}...")
+                else:
+                    failed_tasks.append(task)
+
+            # Retry failed tasks in smaller batches (up to 2 rounds)
+            for retry_round in range(2):
+                if not failed_tasks:
+                    break
+                print(f"\n[Batch mode] Retry round {retry_round + 1}: {len(failed_tasks)} failed tasks")
+                retry_target_entities = [[e[0] for e in task] for task in failed_tasks]
+                retry_samples = self.model.batch_generate_with_claude(
+                    self.corpus, retry_target_entities
+                )
+
+                new_failed = []
+                for task, sample in zip(failed_tasks, retry_samples):
+                    if sample is not None:
+                        dataset.add_sample(sample)
+                        total_generated += 1
+                    else:
+                        new_failed.append(task)
+                failed_tasks = new_failed
+
+            total_failed = len(failed_tasks)
+
+            # Save & return (skip ThreadPoolExecutor path)
+            output_path = self.output_dir / output_filename
+            dataset.save(str(output_path))
+
+            print(f"\n{'='*80}")
+            print(f"Generation completed (Batch API)!")
+            print(f"{'='*80}")
+            print(f"Target samples: {total_samples}")
+            print(f"Actually generated: {total_generated}")
+            print(f"Failed: {total_failed}")
+            print(f"Completion rate: {total_generated/total_samples*100:.1f}%")
+            dataset.print_statistics()
+            return dataset
 
         # Queue + Stack strategy
         task_queue = list(tasks)
@@ -829,7 +889,8 @@ def create_uniform_multi_dataset(
     model: str = "gpt-4o-mini",
     num_workers: int = 10,
     provider: str = "openai",
-    lang: str = "ja"
+    lang: str = "ja",
+    use_batch: bool = False,
 ) -> NERSyntheticDataDataset:
     """
     Convenience function: Type-level uniform sampling + multi-entity generation
@@ -879,7 +940,8 @@ def create_uniform_multi_dataset(
         total_samples=total_samples,
         entities_per_sample=entities_per_sample,
         num_workers=num_workers,
-        top_n=top_n
+        top_n=top_n,
+        use_batch=use_batch,
     )
 
     # 5. Verify distribution (shows difference between uniform and original distribution)

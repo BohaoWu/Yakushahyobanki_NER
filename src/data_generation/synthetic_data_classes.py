@@ -361,6 +361,12 @@ class NERSyntheticDataModel:
             "音曲": "[Rare] Musicians, joruri performers, etc.",
             "事項": "[Extremely Rare] Important matters. Rarely used",
         },
+        "ja_minna": {
+            "location": "[Most Important] Place names — towns, districts, neighborhoods, temples, shrines, bridges, streets in Edo (e.g., 神田, 浅草, 本所, 深川, 永代橋). The dominant entity comprising about 59% of the data",
+            "damage": "[Important] Damage descriptions — collapsed buildings, fires, deaths, injuries, casualty counts (e.g., 潰家, 焼失, 死人, 怪我人, 大破, 半潰). About 27% of the data",
+            "person": "[Normal] Person names — daimyo, officials, residents, victims (e.g., 井上筑後守, 黒田豊前守, 石川殿). About 12% of the data",
+            "datetime": "[Somewhat Rare] Date/time expressions — era names, years, months, days, hours (e.g., 安政二年, 十月二日, 子の刻, 寅の上刻). About 2% of the data",
+        },
         "de": {
             "PER": "Personennamen – vollständige Namen, Titel mit Namen, Adelstitel (z.B. 'König Friedrich Wilhelm', 'Herr Dr. Müller')",
             "LOC": "Ortsnamen – Städte, Länder, Regionen, Straßen, Gebäude (z.B. 'Berlin', 'Preußen', 'Friedrichstraße')",
@@ -383,6 +389,7 @@ class NERSyntheticDataModel:
 
     SYSTEM_MESSAGES = {
         "ja": "You are an expert in Edo-period kabuki and Yakushahyoubanki literature.",
+        "ja_minna": "You are an expert in late-Edo-period (Bakumatsu) Japanese historical documents, particularly disaster records, damage reports, and chronicles related to the 1855 Ansei Edo Earthquake and contemporaneous events. You can perfectly reproduce the cursive (kuzushiji) writing style, mixed kanji-hiragana orthography, and the formal register used in Edo-period administrative documents and damage chronicles.",
         "de": "Du bist ein Experte für historische deutsche Zeitungstexte des 17.–19. Jahrhunderts. Du kannst den Schreibstil historischer Zeitungen perfekt reproduzieren, einschließlich Frakturschrift, veralteter Orthographie und OCR-typischer Fehler.",
         "fr": "Vous êtes un expert en textes de presse historiques français du XVIIe au XIXe siècle. Vous pouvez reproduire parfaitement le style d'écriture des journaux historiques, y compris l'orthographe ancienne.",
         "en": "You are an expert in historical English newspaper texts from the 17th–19th century. You can perfectly reproduce the writing style of historical newspapers, including archaic spelling and OCR-typical errors.",
@@ -499,6 +506,8 @@ class NERSyntheticDataModel:
         """
         if self.lang == "ja":
             return self._create_prompt_ja(corpus, target_entities)
+        elif self.lang == "ja_minna":
+            return self._create_prompt_ja_minna(corpus, target_entities)
         else:
             return self._create_prompt_multilingual(corpus, target_entities)
 
@@ -584,6 +593,119 @@ Notes:
 - In "text", write the generated Edo-period style passage
 - start/end are character indices (starting from 0)
 - Calculate entity positions accurately
+
+Now, please generate a new passage:"""
+        return prompt
+
+    def _create_prompt_ja_minna(
+        self,
+        corpus: NERSyntheticDataCorpus,
+        target_entities: Optional[List[str]] = None
+    ) -> str:
+        """Create Japanese prompt for Minna domain (1855 Ansei Edo Earthquake records)."""
+        entity_definitions = self.ENTITY_DEFINITIONS_BY_LANG.get("ja_minna", {})
+
+        entity_definitions_str = []
+        for entity_type in sorted(corpus.entity_types):
+            definition = entity_definitions.get(entity_type, "Related entity")
+            examples = corpus.get_top_entities(entity_type, 5)
+            examples_str = ", ".join(examples) if examples else "(no examples)"
+            entity_definitions_str.append(
+                f"- {entity_type} ({definition})\n  Examples: {examples_str}"
+            )
+
+        # For minna, few-shot samples can have hundreds of entities which blows up the prompt.
+        # Use SHORT text excerpts (<= 150 chars) and cap entities per example to keep prompt compact.
+        few_shot_samples = corpus.get_few_shot_examples(n=3, min_entities=5)
+        few_shot_examples = []
+        MAX_TEXT_CHARS = 150
+        MAX_ENTITIES_PER_EXAMPLE = 10
+
+        for i, sample in enumerate(few_shot_samples, 1):
+            # Take first MAX_TEXT_CHARS of text
+            short_text = sample.text[:MAX_TEXT_CHARS]
+            # Keep only entities that fit within short_text
+            in_range_entities = [
+                e for e in sample.entities
+                if e['span'][1] <= len(short_text)
+            ]
+            # Cap at MAX_ENTITIES_PER_EXAMPLE
+            selected_entities = in_range_entities[:MAX_ENTITIES_PER_EXAMPLE]
+
+            entities_list = []
+            for entity in selected_entities:
+                entities_list.append(
+                    f"    - [{entity['type']}] {entity['name']} "
+                    f"(position: {entity['span'][0]}-{entity['span'][1]})"
+                )
+            if not entities_list:
+                continue  # skip if no entities fit
+            few_shot_examples.append(
+                f"Example {i}:\nGenerated text: {short_text}\nAnnotation:\n{chr(10).join(entities_list)}"
+            )
+
+        task_description = (
+            "Generate one passage in the style of late-Edo-period (Bakumatsu) Japanese damage records, "
+            "earthquake chronicles, or administrative reports about the 1855 Ansei Edo Earthquake "
+            "and contemporaneous events. Annotate all named entities (location, damage, person, datetime) in the passage."
+        )
+        if target_entities:
+            task_description += f"\n\nImportant: Please make sure to include the following entities in the passage: {', '.join(target_entities)}"
+
+        prompt = f"""# Domain Specification
+You are an expert in late-Edo-period (Bakumatsu, ~1850s) Japanese historical documents,
+particularly disaster records and damage chronicles related to the 1855 Ansei Edo Earthquake.
+You can perfectly reproduce the cursive writing style, mixed kanji-hiragana orthography,
+and the formal register used in Edo-period administrative documents and damage reports.
+
+# Task
+{task_description}
+
+# Entity Types
+The passage must contain the following types of entities:
+
+{chr(10).join(entity_definitions_str)}
+
+# Generation Guidelines
+**Important: Generate in late-Edo-period (Bakumatsu) damage-record style.**
+
+Writing style characteristics:
+1. Mixed kanji and hiragana with historical kana orthography
+2. Use of place markers like "辺", "町", "丁", "御", "様", "殿"
+3. Damage vocabulary: 潰家 (collapsed houses), 焼失 (burned down), 大破 (heavy damage),
+   半潰 (half-collapsed), 死人 (deceased), 怪我人 (injured), 焼亡 (destroyed by fire)
+4. Honorific titles for officials: 〜守, 〜介, 〜殿, 〜様
+5. Time expressions: era names (安政), traditional hours (子の刻, 寅の上刻), Japanese-style dates
+6. Run-on style typical of damage reports — list-like enumeration of locations and damages
+7. Length: approximately 80-200 characters
+
+# Few-shot Examples
+The following are actual examples from Edo-period earthquake records:
+
+{chr(10).join(few_shot_examples)}
+
+# Output Format
+Please output in the following JSON format:
+
+<start_annotation>
+{{
+    "text": "Generated late-Edo-period damage-record style passage",
+    "entities": [
+        {{
+            "type": "entity type (location/damage/person/datetime)",
+            "name": "entity text",
+            "start": start position (integer),
+            "end": end position (integer)
+        }}
+    ]
+}}
+</end_annotation>
+
+Notes:
+- In "text", write the generated late-Edo-period damage-record style passage
+- start/end are character indices (starting from 0)
+- Calculate entity positions accurately
+- Use the four entity types exactly: location, damage, person, datetime
 
 Now, please generate a new passage:"""
         return prompt
@@ -767,6 +889,115 @@ Now generate a new passage:"""
             ]
         )
         return response.content[0].text
+
+    def batch_generate_with_claude(
+        self,
+        corpus: NERSyntheticDataCorpus,
+        target_entities_list: List[List[str]],
+        poll_interval: int = 15,
+        chunk_size: int = 10,
+    ) -> List[Optional['NERSample']]:
+        """
+        Generate multiple samples via Claude Message Batches API, with chunking.
+
+        Submits requests in parallel chunks (default 100 per chunk) to leverage
+        Anthropic's batch parallelism while keeping per-batch overhead amortized.
+
+        Args:
+            corpus: Corpus for prompt construction
+            target_entities_list: List of target entity lists (one per sample)
+            poll_interval: Seconds between status polls (default 15)
+            chunk_size: Requests per batch chunk (default 100)
+
+        Returns:
+            List of NERSample (or None for failed requests), indexed by request order
+        """
+        if self.provider != "claude" or self.client is None:
+            raise RuntimeError("batch_generate_with_claude requires initialized Claude client")
+
+        import time
+        from anthropic.types.messages.batch_create_params import Request
+
+        system_msg = self.SYSTEM_MESSAGES.get(self.lang, self.SYSTEM_MESSAGES["en"])
+        total = len(target_entities_list)
+
+        # ----- Submit all chunks in PARALLEL (non-blocking) -----
+        chunk_metadata = []  # list of (batch_id, start_idx, end_idx)
+        n_chunks = (total + chunk_size - 1) // chunk_size
+
+        print(f"[Batch] Submitting {total} requests in {n_chunks} chunks of {chunk_size}...", flush=True)
+        for chunk_idx in range(n_chunks):
+            start_i = chunk_idx * chunk_size
+            end_i = min(start_i + chunk_size, total)
+            chunk = target_entities_list[start_i:end_i]
+
+            requests = []
+            for local_i, target_entities in enumerate(chunk):
+                global_i = start_i + local_i
+                prompt = self.create_prompt(corpus, target_entities)
+                requests.append(Request(
+                    custom_id=f"req_{global_i:06d}",
+                    params={
+                        "model": self.model,
+                        "max_tokens": 1000,
+                        "system": system_msg,
+                        "messages": [
+                            {"role": "user", "content": prompt}
+                        ],
+                    }
+                ))
+            batch = self.client.messages.batches.create(requests=requests)
+            chunk_metadata.append((batch.id, start_i, end_i))
+            print(f"[Batch]   chunk {chunk_idx+1}/{n_chunks}: {batch.id} ({len(requests)} req)", flush=True)
+
+        # ----- Poll all chunks concurrently -----
+        pending_ids = {meta[0] for meta in chunk_metadata}
+        ended_ids = set()
+        start = time.time()
+
+        while pending_ids:
+            time.sleep(poll_interval)
+            elapsed = int(time.time() - start)
+            for batch_id in list(pending_ids):
+                try:
+                    b = self.client.messages.batches.retrieve(batch_id)
+                    if b.processing_status == "ended":
+                        pending_ids.discard(batch_id)
+                        ended_ids.add(batch_id)
+                except Exception as e:
+                    print(f"[Batch] Poll error {batch_id}: {e}", flush=True)
+            print(f"[Batch] {len(ended_ids)}/{len(chunk_metadata)} chunks ended (elapsed={elapsed}s)", flush=True)
+
+        print(f"[Batch] All chunks ended. Retrieving results...", flush=True)
+
+        # Build result map across all chunks
+        results_map: Dict[int, Optional[NERSample]] = {}
+        for batch_id, _, _ in chunk_metadata:
+            for result in self.client.messages.batches.results(batch_id):
+                idx = int(result.custom_id.split("_")[1])
+                if result.result.type == "succeeded":
+                    message = result.result.message
+                    try:
+                        text_content = message.content[0].text
+                        result_dict = self._extract_json(text_content)
+                        if result_dict:
+                            results_map[idx] = NERSample(
+                                text=result_dict["text"],
+                                entities=result_dict["entities"],
+                            )
+                        else:
+                            results_map[idx] = None
+                    except Exception as e:
+                        print(f"[Batch] Parse error for {result.custom_id}: {e}", flush=True)
+                        results_map[idx] = None
+                else:
+                    results_map[idx] = None
+
+        # Return in order
+        samples = [results_map.get(i) for i in range(total)]
+        success = sum(1 for s in samples if s is not None)
+        print(f"[Batch] Parsed {success}/{total} successful samples", flush=True)
+        return samples
 
     def _extract_json(self, text: str) -> Optional[Dict]:
         """Extract JSON from text"""
