@@ -62,39 +62,7 @@ LOGS_DIR = PROJECT_ROOT / "logs"
 
 # Unified model configuration (includes BERT family and LLaMA family)
 MODEL_CONFIGS = {
-    # Multilingual BERT models
-    "bert-multilingual": {
-        "name": "google-bert/bert-base-multilingual-cased",
-        "description": "Multilingual BERT (104 languages)",
-        "size": "base",
-        "type": "bert",
-        "organization": "Google",
-    },
-    # German BERT models
-    "bert-german": {
-        "name": "dbmdz/bert-base-german-cased",
-        "description": "German BERT (DBMDZ/Bavarian State Library)",
-        "size": "base",
-        "type": "bert",
-        "organization": "DBMDZ",
-    },
-    # English BERT models
-    "bert-english": {
-        "name": "google-bert/bert-base-cased",
-        "description": "English BERT base cased (Google)",
-        "size": "base",
-        "type": "bert",
-        "organization": "Google",
-    },
-    # French BERT models
-    "bert-french": {
-        "name": "dbmdz/bert-base-french-europeana-cased",
-        "description": "French BERT trained on historical Europeana newspapers (DBMDZ)",
-        "size": "base",
-        "type": "bert",
-        "organization": "DBMDZ",
-    },
-    # BERT family models (Japanese)
+    # BERT family models
     "bert": {
         "name": "cl-tohoku/bert-base-japanese-v3",
         "description": "Japanese BERT (Tohoku University)",
@@ -151,20 +119,34 @@ MODEL_CONFIGS = {
         "type": "bert",
         "organization": "Kyoto University",
     },
-    # LLaMA family models (Official Meta LLaMA via NeMo)
-    "llama-1b": {
-        "name": "meta-llama/Llama-3.2-1B",
-        "description": "Official Meta Llama 3.2 1B",
+    # LLaMA family models
+    "rinna-3.6b": {
+        "name": "rinna/japanese-gpt-neox-3.6b",
+        "description": "Japanese GPT-NeoX 3.6B (Rinna)",
+        "size": "3.6B",
+        "type": "llama",
+        "organization": "Rinna",
+    },
+    "rinna-1.3b": {
+        "name": "rinna/japanese-gpt-1b",
+        "description": "Japanese GPT 1B (Rinna)",
         "size": "1B",
         "type": "llama",
-        "organization": "Meta",
+        "organization": "Rinna",
     },
-    "llama-3b": {
-        "name": "meta-llama/Llama-3.2-3B",
-        "description": "Official Meta Llama 3.2 3B",
-        "size": "3B",
+    "llama2-7b-jp": {
+        "name": "elyza/ELYZA-japanese-Llama-2-7b",
+        "description": "Japanese Llama-2 7B (ELYZA)",
+        "size": "7B",
         "type": "llama",
-        "organization": "Meta",
+        "organization": "ELYZA",
+    },
+    "llama3-8b-jp": {
+        "name": "elyza/Llama-3-ELYZA-JP-8B",
+        "description": "Japanese Llama-3 8B (ELYZA)",
+        "size": "8B",
+        "type": "llama",
+        "organization": "ELYZA",
     },
     # BiLSTM (Benchmark/Baseline)
     "bilstm": {

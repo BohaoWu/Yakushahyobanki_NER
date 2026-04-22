@@ -64,100 +64,32 @@ class NERSyntheticDataCorpus:
         self.total_entities = 0
 
     def load(self, trust_remote_code: bool = True, exclude_test: bool = True):
-        """Load dataset (supports HuggingFace datasets and HIPE TSV format)
+        """Load dataset
 
         Args:
             trust_remote_code: Whether to trust remote code
             exclude_test: Whether to exclude test set to avoid data leakage (default: True)
         """
-        import glob as glob_module
-        import os
-
         print(f"Loading corpus: {self.dataset_path}")
 
-        # Check for HIPE TSV format first
-        tsv_files = glob_module.glob(os.path.join(str(self.dataset_path), '**/*.tsv'), recursive=True)
-        if tsv_files:
-            self._load_tsv(tsv_files)
-        else:
-            try:
-                dataset = load_dataset(str(self.dataset_path), trust_remote_code=trust_remote_code)
+        try:
+            dataset = load_dataset(str(self.dataset_path), trust_remote_code=trust_remote_code)
 
-                # Only use train and validation for entity statistics to avoid data leakage
-                splits_to_use = ['train', 'validation'] if exclude_test else ['train', 'validation', 'test']
-                print(f"  Using splits: {splits_to_use}" + (" (excluding test set to avoid leakage)" if exclude_test else ""))
+            # Only use train and validation for entity statistics to avoid data leakage
+            splits_to_use = ['train', 'validation'] if exclude_test else ['train', 'validation', 'test']
+            print(f"  Using splits: {splits_to_use}" + (" (excluding test set to avoid leakage)" if exclude_test else ""))
 
-                for split in splits_to_use:
-                    if split in dataset:
-                        for example in dataset[split]:
-                            self._process_example(example)
-            except Exception as e:
-                print(f"Error: Loading failed - {e}")
-                raise
+            for split in splits_to_use:
+                if split in dataset:
+                    for example in dataset[split]:
+                        self._process_example(example)
 
-        self._analyze_distribution()
-        print(f"Loading complete: {len(self.samples)} samples, {self.total_entities} entities")
+            self._analyze_distribution()
+            print(f"Loading complete: {len(self.samples)} samples, {self.total_entities} entities")
 
-    def _load_tsv(self, tsv_files):
-        """Load HIPE TSV format files into corpus samples"""
-        for filepath in tsv_files:
-            sentences = []
-            current_sentence = []
-
-            with open(filepath, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.rstrip('\n')
-                    if not line:
-                        if current_sentence:
-                            sentences.append(current_sentence)
-                            current_sentence = []
-                        continue
-                    parts = line.split('\t')
-                    if len(parts) >= 2:
-                        current_sentence.append((parts[0], parts[1]))
-                    elif len(parts) == 1:
-                        current_sentence.append((parts[0], 'O'))
-                if current_sentence:
-                    sentences.append(current_sentence)
-
-            for sentence in sentences:
-                tokens = [t[0] for t in sentence]
-                tags = [t[1] for t in sentence]
-                text = ' '.join(tokens)
-
-                entities = []
-                char_pos = 0
-                current_entity = None
-
-                for token, tag in zip(tokens, tags):
-                    token_start = char_pos
-                    token_end = char_pos + len(token)
-
-                    if tag.startswith('B-'):
-                        if current_entity:
-                            entities.append(current_entity)
-                        current_entity = {
-                            'name': token,
-                            'span': [token_start, token_end],
-                            'type': tag[2:],
-                        }
-                    elif tag.startswith('I-') and current_entity:
-                        current_entity['name'] += ' ' + token
-                        current_entity['span'][1] = token_end
-                    else:
-                        if current_entity:
-                            entities.append(current_entity)
-                            current_entity = None
-
-                    char_pos = token_end + 1
-
-                if current_entity:
-                    entities.append(current_entity)
-
-                if entities:
-                    self._process_example({'text': text, 'entities': entities})
-
-        print(f"  Loaded {len(tsv_files)} TSV file(s)")
+        except Exception as e:
+            print(f"Error: Loading failed - {e}")
+            raise
 
     def _process_example(self, example: Dict):
         """Process a single sample"""
@@ -346,63 +278,13 @@ class NERSyntheticDataModel:
     3. Call LLM API to generate data
     """
 
-    # Multilingual entity definitions
-    ENTITY_DEFINITIONS_BY_LANG = {
-        "ja": {
-            "役者": "[Most Important] Kabuki actor names. The primary entity comprising over 60% of the data",
-            "興行関係者": "[Important] Theater managers, promoters, etc. Approximately 18% of the data",
-            "俳名": "[Important] Actor pen names (haigo). Approximately 8% of the data",
-            "演目名": "[Somewhat Important] Kabuki play titles. Approximately 6% of the data",
-            "人名": "[Normal] Person names other than actors. Approximately 3% of the data",
-            "書名": "[Somewhat Rare] Kabuki-related books and literary works",
-            "狂言作者": "[Somewhat Rare] Playwrights, dramatists",
-            "役名": "[Rare] Character names in plays",
-            "屋号": "[Rare] Kabuki actor house names (yago)",
-            "音曲": "[Rare] Musicians, joruri performers, etc.",
-            "事項": "[Extremely Rare] Important matters. Rarely used",
-        },
-        "ja_minna": {
-            "location": "[Most Important] Place names — towns, districts, neighborhoods, temples, shrines, bridges, streets in Edo (e.g., 神田, 浅草, 本所, 深川, 永代橋). The dominant entity comprising about 59% of the data",
-            "damage": "[Important] Damage descriptions — collapsed buildings, fires, deaths, injuries, casualty counts (e.g., 潰家, 焼失, 死人, 怪我人, 大破, 半潰). About 27% of the data",
-            "person": "[Normal] Person names — daimyo, officials, residents, victims (e.g., 井上筑後守, 黒田豊前守, 石川殿). About 12% of the data",
-            "datetime": "[Somewhat Rare] Date/time expressions — era names, years, months, days, hours (e.g., 安政二年, 十月二日, 子の刻, 寅の上刻). About 2% of the data",
-        },
-        "de": {
-            "PER": "Personennamen – vollständige Namen, Titel mit Namen, Adelstitel (z.B. 'König Friedrich Wilhelm', 'Herr Dr. Müller')",
-            "LOC": "Ortsnamen – Städte, Länder, Regionen, Straßen, Gebäude (z.B. 'Berlin', 'Preußen', 'Friedrichstraße')",
-            "ORG": "Organisationen – Behörden, Firmen, Vereine, Parteien (z.B. 'Königl. Akademie', 'Berliner Börse')",
-            "HumanProd": "Menschliche Erzeugnisse – Bücher, Zeitungen, Kunstwerke, Gesetze (z.B. 'Allgemeine Zeitung', 'Handelsgesetzbuch')",
-        },
-        "fr": {
-            "PER": "Noms de personnes – noms complets, titres avec noms, titres de noblesse (ex: 'M. le baron de Rothschild')",
-            "LOC": "Noms de lieux – villes, pays, régions, rues, bâtiments (ex: 'Paris', 'Versailles')",
-            "ORG": "Organisations – administrations, entreprises, associations (ex: 'Académie royale')",
-            "HumanProd": "Productions humaines – livres, journaux, œuvres d'art, lois (ex: 'Le Moniteur universel')",
-        },
-        "en": {
-            "PER": "Person names – full names, titles with names (e.g. 'Lord Wellington', 'Mr. Churchill')",
-            "LOC": "Location names – cities, countries, regions, streets, buildings (e.g. 'London', 'Westminster')",
-            "ORG": "Organizations – institutions, companies, associations (e.g. 'Royal Society', 'Parliament')",
-            "HumanProd": "Human productions – books, newspapers, artworks, laws (e.g. 'The Times', 'Magna Carta')",
-        },
-    }
-
-    SYSTEM_MESSAGES = {
-        "ja": "You are an expert in Edo-period kabuki and Yakushahyoubanki literature.",
-        "ja_minna": "You are an expert in late-Edo-period (Bakumatsu) Japanese historical documents, particularly disaster records, damage reports, and chronicles related to the 1855 Ansei Edo Earthquake and contemporaneous events. You can perfectly reproduce the cursive (kuzushiji) writing style, mixed kanji-hiragana orthography, and the formal register used in Edo-period administrative documents and damage chronicles.",
-        "de": "Du bist ein Experte für historische deutsche Zeitungstexte des 17.–19. Jahrhunderts. Du kannst den Schreibstil historischer Zeitungen perfekt reproduzieren, einschließlich Frakturschrift, veralteter Orthographie und OCR-typischer Fehler.",
-        "fr": "Vous êtes un expert en textes de presse historiques français du XVIIe au XIXe siècle. Vous pouvez reproduire parfaitement le style d'écriture des journaux historiques, y compris l'orthographe ancienne.",
-        "en": "You are an expert in historical English newspaper texts from the 17th–19th century. You can perfectly reproduce the writing style of historical newspapers, including archaic spelling and OCR-typical errors.",
-    }
-
     def __init__(
         self,
         api_key: Optional[str] = None,
         model: str = "gpt-4",
         temperature: float = 0.7,
         base_url: Optional[str] = None,
-        provider: str = "openai",
-        lang: str = "ja"
+        provider: str = "openai"
     ):
         """
         Initialize generation model
@@ -413,14 +295,12 @@ class NERSyntheticDataModel:
             temperature: Temperature parameter
             base_url: API base URL (OpenAI only)
             provider: API provider ("openai" or "claude")
-            lang: Target language for prompt generation (ja/de/fr/en)
         """
         self.api_key = api_key
         self.model = model
         self.temperature = temperature
         self.base_url = base_url
         self.provider = provider.lower()
-        self.lang = lang
         self.client = None
 
         self._initialize_client()
@@ -495,7 +375,7 @@ class NERSyntheticDataModel:
         target_entities: Optional[List[str]] = None
     ) -> str:
         """
-        Create generation prompt (dispatches by language)
+        Create generation prompt
 
         Args:
             corpus: Corpus
@@ -504,21 +384,22 @@ class NERSyntheticDataModel:
         Returns:
             Prompt string
         """
-        if self.lang == "ja":
-            return self._create_prompt_ja(corpus, target_entities)
-        elif self.lang == "ja_minna":
-            return self._create_prompt_ja_minna(corpus, target_entities)
-        else:
-            return self._create_prompt_multilingual(corpus, target_entities)
+        # Entity type definitions (only types present in the corpus)
+        entity_definitions = {
+            "役者": "[Most Important] Kabuki actor names. The primary entity comprising over 60% of the data",
+            "興行関係者": "[Important] Theater managers, promoters, etc. Approximately 18% of the data",
+            "俳名": "[Important] Actor pen names (haigo). Approximately 8% of the data",
+            "演目名": "[Somewhat Important] Kabuki play titles. Approximately 6% of the data",
+            "人名": "[Normal] Person names other than actors. Approximately 3% of the data",
+            "書名": "[Somewhat Rare] Kabuki-related books and literary works",
+            "狂言作者": "[Somewhat Rare] Playwrights, dramatists",
+            "役名": "[Rare] Character names in plays",
+            "屋号": "[Rare] Kabuki actor house names (yago)",
+            "音曲": "[Rare] Musicians, joruri performers, etc.",
+            "事項": "[Extremely Rare] Important matters. Rarely used",
+        }
 
-    def _create_prompt_ja(
-        self,
-        corpus: NERSyntheticDataCorpus,
-        target_entities: Optional[List[str]] = None
-    ) -> str:
-        """Create Japanese prompt (original Yakusha/Kabuki domain)"""
-        entity_definitions = self.ENTITY_DEFINITIONS_BY_LANG.get("ja", {})
-
+        # Only include entity types that exist in the corpus
         entity_definitions_str = []
         for entity_type in sorted(corpus.entity_types):
             definition = entity_definitions.get(entity_type, "Related entity")
@@ -528,8 +409,10 @@ class NERSyntheticDataModel:
                 f"- {entity_type} ({definition})\n  Examples: {examples_str}"
             )
 
+        # Few-shot examples
         few_shot_samples = corpus.get_few_shot_examples(n=3)
         few_shot_examples = []
+
         for i, sample in enumerate(few_shot_samples, 1):
             entities_list = []
             for entity in sample.entities:
@@ -537,14 +420,21 @@ class NERSyntheticDataModel:
                     f"    - [{entity['type']}] {entity['name']} "
                     f"(position: {entity['span'][0]}-{entity['span'][1]})"
                 )
+
             few_shot_examples.append(
-                f"Example {i}:\nGenerated text: {sample.text}\nAnnotation:\n{chr(10).join(entities_list)}"
+                f"""Example {i}:
+Generated text: {sample.text}
+Annotation:
+{chr(10).join(entities_list)}"""
             )
 
+        # Task description
         task_description = "Generate one passage related to Edo-period kabuki and Yakushahyoubanki, and identify and annotate the named entities (NER) in the passage."
         if target_entities:
-            task_description += f"\n\nImportant: Please make sure to include the following entities in the passage: {', '.join(target_entities)}"
+            entities_str = ", ".join(target_entities)
+            task_description += f"\n\nImportant: Please make sure to include the following entities in the passage: {entities_str}"
 
+        # Complete prompt
         prompt = f"""# Domain Specification
 You are an expert well-versed in the fields of Japanese Edo-period Yakushahyoubanki and kabuki. You can perfectly reproduce the writing style of Edo-period theater critiques, actor reviews, and theater-related literature (especially classical literary style from the Genroku and Hoei periods).
 
@@ -566,6 +456,12 @@ Writing style characteristics:
 4. Include multiple contents in a single long sentence (approximately 50-120 characters)
 5. Actor review and theater critique style (ending with "~nari", "~keri", "~haberu")
 6. Include metaphorical and erudite expressions
+
+Characteristics of example passages:
+- "~nite enjirare-shi", "~no yaku wo tsutome", "migoto nari"
+- Conjunctions such as "kono tabi", "satemo", "saredo", "koko ni"
+- Auxiliary verbs such as "haberu", "soro", "nari", "keri"
+- Expressions such as "~to oboeyu", "~to iu"
 
 # Few-shot Examples
 The following are actual examples from Edo-period literature:
@@ -595,231 +491,7 @@ Notes:
 - Calculate entity positions accurately
 
 Now, please generate a new passage:"""
-        return prompt
 
-    def _create_prompt_ja_minna(
-        self,
-        corpus: NERSyntheticDataCorpus,
-        target_entities: Optional[List[str]] = None
-    ) -> str:
-        """Create Japanese prompt for Minna domain (1855 Ansei Edo Earthquake records)."""
-        entity_definitions = self.ENTITY_DEFINITIONS_BY_LANG.get("ja_minna", {})
-
-        entity_definitions_str = []
-        for entity_type in sorted(corpus.entity_types):
-            definition = entity_definitions.get(entity_type, "Related entity")
-            examples = corpus.get_top_entities(entity_type, 5)
-            examples_str = ", ".join(examples) if examples else "(no examples)"
-            entity_definitions_str.append(
-                f"- {entity_type} ({definition})\n  Examples: {examples_str}"
-            )
-
-        # For minna, few-shot samples can have hundreds of entities which blows up the prompt.
-        # Use SHORT text excerpts (<= 150 chars) and cap entities per example to keep prompt compact.
-        few_shot_samples = corpus.get_few_shot_examples(n=3, min_entities=5)
-        few_shot_examples = []
-        MAX_TEXT_CHARS = 150
-        MAX_ENTITIES_PER_EXAMPLE = 10
-
-        for i, sample in enumerate(few_shot_samples, 1):
-            # Take first MAX_TEXT_CHARS of text
-            short_text = sample.text[:MAX_TEXT_CHARS]
-            # Keep only entities that fit within short_text
-            in_range_entities = [
-                e for e in sample.entities
-                if e['span'][1] <= len(short_text)
-            ]
-            # Cap at MAX_ENTITIES_PER_EXAMPLE
-            selected_entities = in_range_entities[:MAX_ENTITIES_PER_EXAMPLE]
-
-            entities_list = []
-            for entity in selected_entities:
-                entities_list.append(
-                    f"    - [{entity['type']}] {entity['name']} "
-                    f"(position: {entity['span'][0]}-{entity['span'][1]})"
-                )
-            if not entities_list:
-                continue  # skip if no entities fit
-            few_shot_examples.append(
-                f"Example {i}:\nGenerated text: {short_text}\nAnnotation:\n{chr(10).join(entities_list)}"
-            )
-
-        task_description = (
-            "Generate one passage in the style of late-Edo-period (Bakumatsu) Japanese damage records, "
-            "earthquake chronicles, or administrative reports about the 1855 Ansei Edo Earthquake "
-            "and contemporaneous events. Annotate all named entities (location, damage, person, datetime) in the passage."
-        )
-        if target_entities:
-            task_description += f"\n\nImportant: Please make sure to include the following entities in the passage: {', '.join(target_entities)}"
-
-        prompt = f"""# Domain Specification
-You are an expert in late-Edo-period (Bakumatsu, ~1850s) Japanese historical documents,
-particularly disaster records and damage chronicles related to the 1855 Ansei Edo Earthquake.
-You can perfectly reproduce the cursive writing style, mixed kanji-hiragana orthography,
-and the formal register used in Edo-period administrative documents and damage reports.
-
-# Task
-{task_description}
-
-# Entity Types
-The passage must contain the following types of entities:
-
-{chr(10).join(entity_definitions_str)}
-
-# Generation Guidelines
-**Important: Generate in late-Edo-period (Bakumatsu) damage-record style.**
-
-Writing style characteristics:
-1. Mixed kanji and hiragana with historical kana orthography
-2. Use of place markers like "辺", "町", "丁", "御", "様", "殿"
-3. Damage vocabulary: 潰家 (collapsed houses), 焼失 (burned down), 大破 (heavy damage),
-   半潰 (half-collapsed), 死人 (deceased), 怪我人 (injured), 焼亡 (destroyed by fire)
-4. Honorific titles for officials: 〜守, 〜介, 〜殿, 〜様
-5. Time expressions: era names (安政), traditional hours (子の刻, 寅の上刻), Japanese-style dates
-6. Run-on style typical of damage reports — list-like enumeration of locations and damages
-7. Length: approximately 80-200 characters
-
-# Few-shot Examples
-The following are actual examples from Edo-period earthquake records:
-
-{chr(10).join(few_shot_examples)}
-
-# Output Format
-Please output in the following JSON format:
-
-<start_annotation>
-{{
-    "text": "Generated late-Edo-period damage-record style passage",
-    "entities": [
-        {{
-            "type": "entity type (location/damage/person/datetime)",
-            "name": "entity text",
-            "start": start position (integer),
-            "end": end position (integer)
-        }}
-    ]
-}}
-</end_annotation>
-
-Notes:
-- In "text", write the generated late-Edo-period damage-record style passage
-- start/end are character indices (starting from 0)
-- Calculate entity positions accurately
-- Use the four entity types exactly: location, damage, person, datetime
-
-Now, please generate a new passage:"""
-        return prompt
-
-    def _create_prompt_multilingual(
-        self,
-        corpus: NERSyntheticDataCorpus,
-        target_entities: Optional[List[str]] = None
-    ) -> str:
-        """Create prompt for multilingual historical newspaper NER (de/fr/en)"""
-        lang = self.lang
-        entity_definitions = self.ENTITY_DEFINITIONS_BY_LANG.get(lang, self.ENTITY_DEFINITIONS_BY_LANG["en"])
-
-        # Build entity type definitions with examples from corpus
-        entity_definitions_str = []
-        for entity_type in sorted(corpus.entity_types):
-            definition = entity_definitions.get(entity_type, entity_type)
-            examples = corpus.get_top_entities(entity_type, 5)
-            examples_str = ", ".join(examples) if examples else "(keine Beispiele)" if lang == "de" else "(no examples)"
-            entity_definitions_str.append(
-                f"- {entity_type}: {definition}\n  Examples: {examples_str}"
-            )
-
-        # Few-shot examples from real data
-        few_shot_samples = corpus.get_few_shot_examples(n=3, min_entities=2)
-        few_shot_examples = []
-        for i, sample in enumerate(few_shot_samples, 1):
-            entities_list = []
-            for entity in sample.entities:
-                entities_list.append(
-                    f"    - [{entity['type']}] \"{entity['name']}\" "
-                    f"(pos: {entity['span'][0]}-{entity['span'][1]})"
-                )
-            few_shot_examples.append(
-                f"Example {i}:\nText: {sample.text}\nEntities:\n{chr(10).join(entities_list)}"
-            )
-
-        # Language-specific domain and style descriptions
-        domain_desc = {
-            "de": "Du bist ein Experte für historische deutsche Zeitungstexte des 17.–19. Jahrhunderts. Du kennst die typischen Merkmale von OCR-digitalisierten Zeitungstexten aus dieser Epoche.",
-            "fr": "Vous êtes un expert en textes de presse historiques français du XVIIe au XIXe siècle. Vous connaissez les caractéristiques typiques des textes de journaux numérisés par OCR de cette époque.",
-            "en": "You are an expert in historical English newspaper texts from the 17th–19th century. You know the typical characteristics of OCR-digitized newspaper texts from this era.",
-        }
-
-        style_guidelines = {
-            "de": """Stilmerkmale:
-1. Typische OCR-Fehler aus Frakturschrift: ſ statt s, f statt ſ, rn→m, ii→ü, cl→d
-2. Veraltete Orthographie: th statt t (z.B. "thun"), ey statt ei, ä→ae
-3. Historische Wortformen: "allhier", "desgleichen", "bishero", "anbey"
-4. Lange Schachtelsätze mit Nebensätzen (typisch für 18./19. Jh.)
-5. Höflichkeitsformeln: "Se. Königl. Majestät", "Ihro Durchlaucht"
-6. Zeitungsstil: Nachrichtenberichte, Anzeigen, Bekanntmachungen
-7. Themenbereiche: Politik, Handel, Kriege, Hofnachrichten, Theaterkritiken""",
-            "fr": """Caractéristiques stylistiques:
-1. Erreurs OCR typiques: ſ au lieu de s, lettres confondues
-2. Orthographe ancienne: oi au lieu de ai (ex: "François" → "Françoiſ")
-3. Formes historiques: "ledit", "icelle", "cy-devant"
-4. Longues phrases avec subordonnées (typique du XVIIIe/XIXe siècle)
-5. Formules de politesse: "Sa Majesté", "Son Excellence"
-6. Style journalistique: nouvelles, annonces, avis officiels""",
-            "en": """Style characteristics:
-1. Typical OCR errors: ſ instead of s, rn→m, confused letters
-2. Archaic spelling: "publick", "connexion", "honour"
-3. Historical forms: "hath", "thereof", "aforesaid"
-4. Long complex sentences typical of 18th/19th century prose
-5. Honorifics: "His Majesty", "the Right Honourable"
-6. Newspaper style: news reports, advertisements, official notices""",
-        }
-
-        task_description = f"Generate one realistic passage that resembles a historical newspaper text ({lang.upper()}, 17th–19th century) and annotate all named entities (NER) in the passage."
-        if target_entities:
-            task_description += f"\n\nIMPORTANT: You MUST include the following entities in the generated passage: {', '.join(target_entities)}"
-
-        prompt = f"""# Domain
-{domain_desc.get(lang, domain_desc['en'])}
-
-# Task
-{task_description}
-
-# Entity Types
-The passage must contain the following types of entities:
-
-{chr(10).join(entity_definitions_str)}
-
-# Writing Style Guidelines
-{style_guidelines.get(lang, style_guidelines['en'])}
-
-# Real Examples from the Corpus
-{chr(10).join(few_shot_examples) if few_shot_examples else "(No examples available)"}
-
-# Output Format
-Output in the following JSON format:
-
-<start_annotation>
-{{
-    "text": "Generated historical newspaper passage",
-    "entities": [
-        {{
-            "type": "entity type",
-            "name": "entity text as it appears in the passage",
-            "start": start_position (integer, 0-indexed),
-            "end": end_position (integer, exclusive)
-        }}
-    ]
-}}
-</end_annotation>
-
-IMPORTANT:
-- The text must read like a real 17th–19th century newspaper article
-- start/end are character indices (0-indexed, end is exclusive)
-- Calculate entity positions accurately – they must match the exact text
-- Generate 50–150 words of text
-
-Now generate a new passage:"""
         return prompt
 
     def generate_single(
@@ -865,11 +537,10 @@ Now generate a new passage:"""
 
     def _generate_with_openai(self, prompt: str) -> Optional[str]:
         """Generate using OpenAI API"""
-        system_msg = self.SYSTEM_MESSAGES.get(self.lang, self.SYSTEM_MESSAGES["en"])
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": system_msg},
+                {"role": "system", "content": "You are an expert in Edo-period kabuki and Yakushahyoubanki literature."},
                 {"role": "user", "content": prompt}
             ],
             temperature=self.temperature,
@@ -879,11 +550,10 @@ Now generate a new passage:"""
 
     def _generate_with_claude(self, prompt: str) -> Optional[str]:
         """Generate using Claude API"""
-        system_msg = self.SYSTEM_MESSAGES.get(self.lang, self.SYSTEM_MESSAGES["en"])
         response = self.client.messages.create(
             model=self.model,
             max_tokens=1000,
-            system=system_msg,
+            system="You are an expert in Edo-period kabuki and Yakushahyoubanki literature.",
             messages=[
                 {"role": "user", "content": prompt}
             ]
