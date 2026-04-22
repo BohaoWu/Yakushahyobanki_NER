@@ -560,6 +560,115 @@ Now, please generate a new passage:"""
         )
         return response.content[0].text
 
+    def batch_generate_with_claude(
+        self,
+        corpus: NERSyntheticDataCorpus,
+        target_entities_list: List[List[str]],
+        poll_interval: int = 15,
+        chunk_size: int = 10,
+    ) -> List[Optional['NERSample']]:
+        """
+        Generate multiple samples via Claude Message Batches API, with chunking.
+
+        Submits requests in parallel chunks (default 100 per chunk) to leverage
+        Anthropic's batch parallelism while keeping per-batch overhead amortized.
+
+        Args:
+            corpus: Corpus for prompt construction
+            target_entities_list: List of target entity lists (one per sample)
+            poll_interval: Seconds between status polls (default 15)
+            chunk_size: Requests per batch chunk (default 100)
+
+        Returns:
+            List of NERSample (or None for failed requests), indexed by request order
+        """
+        if self.provider != "claude" or self.client is None:
+            raise RuntimeError("batch_generate_with_claude requires initialized Claude client")
+
+        import time
+        from anthropic.types.messages.batch_create_params import Request
+
+        system_msg = self.SYSTEM_MESSAGES.get(self.lang, self.SYSTEM_MESSAGES["en"])
+        total = len(target_entities_list)
+
+        # ----- Submit all chunks in PARALLEL (non-blocking) -----
+        chunk_metadata = []  # list of (batch_id, start_idx, end_idx)
+        n_chunks = (total + chunk_size - 1) // chunk_size
+
+        print(f"[Batch] Submitting {total} requests in {n_chunks} chunks of {chunk_size}...", flush=True)
+        for chunk_idx in range(n_chunks):
+            start_i = chunk_idx * chunk_size
+            end_i = min(start_i + chunk_size, total)
+            chunk = target_entities_list[start_i:end_i]
+
+            requests = []
+            for local_i, target_entities in enumerate(chunk):
+                global_i = start_i + local_i
+                prompt = self.create_prompt(corpus, target_entities)
+                requests.append(Request(
+                    custom_id=f"req_{global_i:06d}",
+                    params={
+                        "model": self.model,
+                        "max_tokens": 1000,
+                        "system": system_msg,
+                        "messages": [
+                            {"role": "user", "content": prompt}
+                        ],
+                    }
+                ))
+            batch = self.client.messages.batches.create(requests=requests)
+            chunk_metadata.append((batch.id, start_i, end_i))
+            print(f"[Batch]   chunk {chunk_idx+1}/{n_chunks}: {batch.id} ({len(requests)} req)", flush=True)
+
+        # ----- Poll all chunks concurrently -----
+        pending_ids = {meta[0] for meta in chunk_metadata}
+        ended_ids = set()
+        start = time.time()
+
+        while pending_ids:
+            time.sleep(poll_interval)
+            elapsed = int(time.time() - start)
+            for batch_id in list(pending_ids):
+                try:
+                    b = self.client.messages.batches.retrieve(batch_id)
+                    if b.processing_status == "ended":
+                        pending_ids.discard(batch_id)
+                        ended_ids.add(batch_id)
+                except Exception as e:
+                    print(f"[Batch] Poll error {batch_id}: {e}", flush=True)
+            print(f"[Batch] {len(ended_ids)}/{len(chunk_metadata)} chunks ended (elapsed={elapsed}s)", flush=True)
+
+        print(f"[Batch] All chunks ended. Retrieving results...", flush=True)
+
+        # Build result map across all chunks
+        results_map: Dict[int, Optional[NERSample]] = {}
+        for batch_id, _, _ in chunk_metadata:
+            for result in self.client.messages.batches.results(batch_id):
+                idx = int(result.custom_id.split("_")[1])
+                if result.result.type == "succeeded":
+                    message = result.result.message
+                    try:
+                        text_content = message.content[0].text
+                        result_dict = self._extract_json(text_content)
+                        if result_dict:
+                            results_map[idx] = NERSample(
+                                text=result_dict["text"],
+                                entities=result_dict["entities"],
+                            )
+                        else:
+                            results_map[idx] = None
+                    except Exception as e:
+                        print(f"[Batch] Parse error for {result.custom_id}: {e}", flush=True)
+                        results_map[idx] = None
+                else:
+                    results_map[idx] = None
+
+        # Return in order
+        samples = [results_map.get(i) for i in range(total)]
+        success = sum(1 for s in samples if s is not None)
+        print(f"[Batch] Parsed {success}/{total} successful samples", flush=True)
+        return samples
+
     def _extract_json(self, text: str) -> Optional[Dict]:
         """Extract JSON from text"""
         import re

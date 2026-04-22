@@ -1,0 +1,47 @@
+{
+  "experiment_name": "minna_three_stage_top${topn}_claude",
+  "description": "Minna three-stage training: 1) MLM pretrain on minna corpus 2) NER on synthetic data by Claude (N=${topn}) 3) Fine-tune on real Minna data. 7 models (no CRF), early stopping patience=5",
+  "models": [
+    { "name": "bert", "model_id": "bert", "use_crf": false },
+    { "name": "bert-large", "model_id": "bert_large", "use_crf": false },
+    { "name": "roberta", "model_id": "roberta", "use_crf": false },
+    { "name": "luke", "model_id": "luke", "use_crf": false },
+    { "name": "albert", "model_id": "albert", "use_crf": false },
+    { "name": "deberta", "model_id": "deberta", "use_crf": false },
+    { "name": "bilstm", "model_id": "bilstm", "use_crf": false }
+  ],
+  "data": {
+    "datasets": [
+      "dataset/minna_synthetic_topn${topn}_uniform_claude",
+      "dataset/minna"
+    ],
+    "epochs": [10, 50]
+  },
+  "training": {
+    "batch_size": 32,
+    "learning_rate": 2e-05,
+    "seed": 42,
+    "early_stopping_patience": 5
+  },
+  "mlm_pretrain": {
+    "enabled": true,
+    "corpus": "corpus/corpus_minna.txt",
+    "corpus_size": 100000,
+    "epochs": 3,
+    "batch_size": 16,
+    "learning_rate": 5e-05,
+    "mlm_probability": 0.15
+  },
+  "output": {
+    "dir": "experiments/minna_three_stage_top${topn}_claude_${timestamp}",
+    "save_model": false
+  },
+  "advanced": {
+    "run_in_background": false,
+    "log_file": "logs/minna_three_stage_top${topn}_claude.log"
+  },
+  "evaluation": {
+    "enabled": true,
+    "output_dir": "experiments/minna_three_stage_top${topn}_claude_${timestamp}/evaluation_report"
+  }
+}

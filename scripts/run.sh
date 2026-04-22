@@ -557,20 +557,20 @@ fi
 # ============================================================================
 if [ -t 0 ]; then
     if [ -n "$GPU_OVERRIDE" ]; then
-        read -p "是否开始在 GPU $GPU_OVERRIDE 上顺序训练 $NUM_TASKS 个模型? (y/n) " -n 1 -r
+        read -p "Start sequential training of $NUM_TASKS models on GPU $GPU_OVERRIDE? (y/n) " -n 1 -r
     elif [ "$NUM_GPUS" -gt 1 ]; then
-        read -p "是否开始在 $NUM_GPUS 个 GPU 上并行训练 $NUM_TASKS 个模型? (y/n) " -n 1 -r
+        read -p "Start parallel training of $NUM_TASKS models across $NUM_GPUS GPUs? (y/n) " -n 1 -r
     else
-        read -p "是否开始训练 $NUM_TASKS 个模型? (y/n) " -n 1 -r
+        read -p "Start training $NUM_TASKS models? (y/n) " -n 1 -r
     fi
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "已取消"
+        echo "Cancelled"
         [ -n "$TEMP_CONFIG" ] && rm -f "$TEMP_CONFIG"
         exit 0
     fi
 else
-    echo -e "${YELLOW}非交互式环境，自动继续执行${NC}"
+    echo -e "${YELLOW}Non-interactive environment, auto-continuing${NC}"
 fi
 
 # ============================================================================
@@ -601,11 +601,11 @@ if [ -n "$GPU_OVERRIDE" ]; then
         EXIT_CODE=$?
 
         if [ $EXIT_CODE -eq 0 ]; then
-            echo -e "${GREEN}✓ ${TASK_NAMES[$i]} 训练完成！${NC}"
+            echo -e "${GREEN}✓ ${TASK_NAMES[$i]} training completed!${NC}"
             ALL_RESULT_DIRS="$ALL_RESULT_DIRS ${TASK_OUTPUT_DIRS[$i]}"
             SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
         else
-            echo -e "${RED}✗ ${TASK_NAMES[$i]} 训练失败 (退出码: $EXIT_CODE)${NC}"
+            echo -e "${RED}✗ ${TASK_NAMES[$i]} training failed (exit code: $EXIT_CODE)${NC}"
             FAILED_COUNT=$((FAILED_COUNT + 1))
         fi
     done
@@ -636,11 +636,11 @@ elif [ "$NUM_GPUS" -le 1 ]; then
         EXIT_CODE=$?
 
         if [ $EXIT_CODE -eq 0 ]; then
-            echo -e "${GREEN}✓ ${TASK_NAMES[$i]} 训练完成！${NC}"
+            echo -e "${GREEN}✓ ${TASK_NAMES[$i]} training completed!${NC}"
             ALL_RESULT_DIRS="$ALL_RESULT_DIRS ${TASK_OUTPUT_DIRS[$i]}"
             SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
         else
-            echo -e "${RED}✗ ${TASK_NAMES[$i]} 训练失败 (退出码: $EXIT_CODE)${NC}"
+            echo -e "${RED}✗ ${TASK_NAMES[$i]} training failed (exit code: $EXIT_CODE)${NC}"
             FAILED_COUNT=$((FAILED_COUNT + 1))
         fi
     done
@@ -677,12 +677,12 @@ else
                 COMPLETED=$((COMPLETED + 1))
 
                 if [ $exit_code -eq 0 ]; then
-                    echo -e "${GREEN}✓ [$COMPLETED/$NUM_TASKS] $task_name 训练完成 (GPU $gpu_id)${NC}"
+                    echo -e "${GREEN}✓ [$COMPLETED/$NUM_TASKS] $task_name training completed (GPU $gpu_id)${NC}"
                     ALL_RESULT_DIRS="$ALL_RESULT_DIRS ${TASK_OUTPUT_DIRS[$task_idx]}"
                     SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
                 else
-                    echo -e "${RED}✗ [$COMPLETED/$NUM_TASKS] $task_name 训练失败 (GPU $gpu_id, 退出码: $exit_code)${NC}"
-                    echo -e "  日志: ${YELLOW}$log_file${NC}"
+                    echo -e "${RED}✗ [$COMPLETED/$NUM_TASKS] $task_name training failed (GPU $gpu_id, exit code: $exit_code)${NC}"
+                    echo -e "  Log: ${YELLOW}$log_file${NC}"
                     FAILED_COUNT=$((FAILED_COUNT + 1))
                 fi
 
@@ -709,7 +709,7 @@ else
             FULL_CMD="CUDA_VISIBLE_DEVICES=$FREE_GPU ${TASK_CMDS[$NEXT_TASK]}"
 
             echo -e "${BLUE}[Task $((NEXT_TASK + 1))/$NUM_TASKS] ${GREEN}$task_name${NC} -> GPU $FREE_GPU"
-            echo -e "  日志: ${YELLOW}$LOG_FILE${NC}"
+            echo -e "  Log: ${YELLOW}$LOG_FILE${NC}"
 
             # Launch in background
             eval $FULL_CMD > "$LOG_FILE" 2>&1 &
@@ -732,24 +732,24 @@ fi
 
 echo ""
 echo -e "${BLUE}======================================${NC}"
-echo -e "${GREEN}所有模型训练完成！${NC}"
-echo -e "  成功: ${GREEN}$SUCCESS_COUNT${NC}  失败: ${RED}$FAILED_COUNT${NC}"
+echo -e "${GREEN}All model training completed!${NC}"
+echo -e "  Succeeded: ${GREEN}$SUCCESS_COUNT${NC}  Failed: ${RED}$FAILED_COUNT${NC}"
 echo -e "${BLUE}======================================${NC}"
 
-# 所有模型训练完成后，执行评价
+# After all model training completed, run evaluation
 EVAL_ENABLED=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('evaluation', {}).get('enabled', False))")
 
 if [ "$EVAL_ENABLED" = "True" ]; then
     echo ""
     echo -e "${BLUE}======================================${NC}"
-    echo -e "${GREEN}开始评价和绘图...${NC}"
+    echo -e "${GREEN}Starting evaluation and plotting...${NC}"
     echo -e "${BLUE}======================================${NC}"
 
-    # 读取评价配置
+    # Read evaluation configuration
     EVAL_OUTPUT_DIR=$(python3 -c "import json; d=json.load(open('$CONFIG_FILE')).get('evaluation', {}).get('output_dir', 'evaluation_report'); print(d.replace('\${timestamp}', '$TIMESTAMP'))")
     COMPARE_WITH=$(python3 -c "import json; import sys; cw=json.load(open('$CONFIG_FILE')).get('evaluation', {}).get('compare_with', []); print(' '.join(cw) if cw else '')")
 
-    # 收集所有训练结果文件
+    # Collect all training result files
     RESULT_FILES=""
     for result_dir in $ALL_RESULT_DIRS; do
         if [ -f "$result_dir/result.json" ]; then
@@ -757,7 +757,7 @@ if [ "$EVAL_ENABLED" = "True" ]; then
         fi
     done
 
-    # 添加额外对比的结果文件
+    # Add additional comparison result files
     if [ -n "$COMPARE_WITH" ]; then
         for compare_dir in $COMPARE_WITH; do
             if [ -f "$compare_dir/result.json" ]; then
@@ -766,7 +766,7 @@ if [ "$EVAL_ENABLED" = "True" ]; then
         done
     fi
 
-    # 调用 evaluation.py
+    # Call evaluation.py
     python3 << EOF
 import sys
 sys.path.insert(0, 'src/core')
@@ -774,7 +774,7 @@ from train import HistoryDocumentResult
 from evaluation import ResultEvaluator
 
 result_files = "$RESULT_FILES".split()
-print(f"加载 {len(result_files)} 个结果文件...")
+print(f"Loading {len(result_files)} result files...")
 
 results = []
 for f in result_files:
@@ -789,19 +789,19 @@ if results:
     evaluator.print_summary()
     evaluator.create_full_report("$EVAL_OUTPUT_DIR")
 else:
-    print("没有成功加载任何结果")
+    print("No results loaded successfully")
 EOF
 
     if [ $? -eq 0 ]; then
         echo ""
-        echo -e "${GREEN}✓ 评价完成！${NC}"
-        echo -e "报告保存在: ${YELLOW}$EVAL_OUTPUT_DIR${NC}"
+        echo -e "${GREEN}✓ Evaluation completed!${NC}"
+        echo -e "Report saved to: ${YELLOW}$EVAL_OUTPUT_DIR${NC}"
     else
-        echo -e "${RED}✗ 评价失败${NC}"
+        echo -e "${RED}✗ Evaluation failed${NC}"
     fi
 fi
 
-# 清理临时配置文件
+# Clean up temporary config files
 [ -n "$TEMP_CONFIG" ] && rm -f "$TEMP_CONFIG"
 
 echo ""

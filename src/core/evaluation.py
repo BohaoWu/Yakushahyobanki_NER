@@ -771,7 +771,7 @@ class ResultEvaluator:
             y_max = 1.0
 
         for ax, (title, results) in zip(axes, [("Non-CRF Models", non_crf_results), ("CRF Models", crf_results)]):
-            # 按F1排序，选择前6个
+            # Sort by F1, select top 6
             sorted_results = sorted(results, key=lambda r: r.metrics.get("f1", 0), reverse=True)[:6]
 
             for idx, result in enumerate(sorted_results):
@@ -788,7 +788,7 @@ class ResultEvaluator:
             ax.set_xticks(angles[:-1])
             ax.set_xticklabels(entity_types, fontsize=9)
             ax.set_ylim(0, y_max)
-            # 动态设置刻度
+            # Dynamically set tick marks
             num_ticks = 4
             tick_step = y_max / num_ticks
             yticks = [tick_step * i for i in range(1, num_ticks + 1)]
@@ -798,13 +798,13 @@ class ResultEvaluator:
             ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0), fontsize=8)
             ax.grid(True, alpha=0.3)
 
-        plt.suptitle(f'固有表現カテゴリ別F1スコア比較（CRF vs 非CRF, Scale: 0-{y_max:.1f}）\n(Entity F1 Comparison: CRF vs Non-CRF)',
+        plt.suptitle(f'Entity Category F1 Score Comparison (CRF vs Non-CRF, Scale: 0-{y_max:.1f})',
                     fontsize=15, fontweight='bold', y=1.02)
         plt.tight_layout()
 
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
-            print(f"✓ CRF对比雷达图已保存到: {save_path}")
+            print(f"✓ CRF comparison radar chart saved to: {save_path}")
 
         if show:
             plt.show()
@@ -812,10 +812,10 @@ class ResultEvaluator:
 
     def export_to_csv(self, output_file: str):
         """
-        导出为 CSV 文件
+        Export to CSV file
 
         Args:
-            output_file: 输出文件路径
+            output_file: Output file path
         """
         import pandas as pd
 
@@ -823,97 +823,97 @@ class ResultEvaluator:
         df = pd.DataFrame(summary)
 
         df.to_csv(output_file, index=False, encoding="utf-8-sig")
-        print(f"✓ 已导出到: {output_file}")
+        print(f"✓ Exported to: {output_file}")
 
     def export_to_json(self, output_file: str):
         """
-        导出为 JSON 文件
+        Export to JSON file
 
         Args:
-            output_file: 输出文件路径
+            output_file: Output file path
         """
         summary = self.get_summary_table()
 
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(summary, f, ensure_ascii=False, indent=2)
 
-        print(f"✓ 已导出到: {output_file}")
+        print(f"✓ Exported to: {output_file}")
 
     def create_full_report(self, output_dir: str):
         """
-        创建完整的评价报告
+        Create full evaluation report
 
         Args:
-            output_dir: 输出目录
+            output_dir: Output directory
         """
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
         print(f"\n{'='*80}")
-        print(f"创建完整评价报告")
+        print(f"Creating full evaluation report")
         print(f"{'='*80}")
 
-        # 1. 打印汇总
+        # 1. Print summary
         self.print_summary()
 
-        # 2. 导出 CSV 和 JSON
-        print("\n导出数据...")
+        # 2. Export CSV and JSON
+        print("\nExporting data...")
         self.export_to_csv(str(output_path / "summary.csv"))
         self.export_to_json(str(output_path / "summary.json"))
 
-        # 3. 生成所有对比图表
+        # 3. Generate all comparison charts
         self.plot_all_metrics_comparison(save_dir=str(output_path), show=False)
 
-        # 4. Precision-Recall 散点图
+        # 4. Precision-Recall scatter plot
         self.plot_precision_recall_scatter(
             save_path=str(output_path / "precision_recall_scatter.png"),
             show=False
         )
 
-        # 5. 雷达图
+        # 5. Radar chart
         self.plot_radar_chart(
             save_path=str(output_path / "radar_chart.png"),
             show=False
         )
 
-        # 6. 实体类型分析
-        print("\n分析实体类型表现...")
+        # 6. Entity type analysis
+        print("\nAnalyzing entity type performance...")
         best_per_entity = self.find_best_model_per_entity()
         with open(output_path / "best_model_per_entity.json", 'w', encoding='utf-8') as f:
             json.dump(best_per_entity, f, ensure_ascii=False, indent=2)
-        print(f"✓ 实体类型最佳模型已保存到: {output_path / 'best_model_per_entity.json'}")
+        print(f"✓ Best model per entity type saved to: {output_path / 'best_model_per_entity.json'}")
 
         print(f"\n{'='*80}")
-        print(f"✓ 完整报告已生成在: {output_path}")
+        print(f"✓ Full report generated at: {output_path}")
         print(f"{'='*80}")
-        print(f"文件列表:")
-        print(f"  - summary.csv                      # 汇总表格")
-        print(f"  - summary.json                     # 汇总数据")
+        print(f"File list:")
+        print(f"  - summary.csv                      # Summary table")
+        print(f"  - summary.json                     # Summary data")
         print(f"  - f1_comparison.png                # F1 comparison")
         print(f"  - precision_comparison.png         # Precision comparison")
         print(f"  - recall_comparison.png            # Recall comparison")
-        print(f"  - training_time_comparison.png     # 训练时间对比")
-        print(f"  - precision_recall_scatter.png     # Precision-Recall 散点图")
-        print(f"  - radar_chart.png                  # 雷达图")
-        print(f"  - best_model_per_entity.json       # 每个实体类型的最佳模型")
+        print(f"  - training_time_comparison.png     # Training time comparison")
+        print(f"  - precision_recall_scatter.png     # Precision-Recall scatter plot")
+        print(f"  - radar_chart.png                  # Radar chart")
+        print(f"  - best_model_per_entity.json       # Best model per entity type")
         print(f"{'='*80}")
 
 
 def main():
-    """命令行接口示例"""
+    """Command-line interface"""
     import argparse
 
-    parser = argparse.ArgumentParser(description="评价和可视化工具")
-    parser.add_argument("--dir", required=True, help="包含 result.json 文件的目录")
-    parser.add_argument("--output", default="evaluation_report", help="输出目录")
-    parser.add_argument("--pattern", default="*/result.json", help="文件匹配模式")
+    parser = argparse.ArgumentParser(description="Evaluation and visualization tool")
+    parser.add_argument("--dir", required=True, help="Directory containing result.json files")
+    parser.add_argument("--output", default="evaluation_report", help="Output directory")
+    parser.add_argument("--pattern", default="*/result.json", help="File matching pattern")
 
     args = parser.parse_args()
 
-    # 创建评价器
+    # Create evaluator
     evaluator = ResultEvaluator.from_directory(args.dir, args.pattern)
 
-    # 生成完整报告
+    # Generate full report
     evaluator.create_full_report(args.output)
 
 
