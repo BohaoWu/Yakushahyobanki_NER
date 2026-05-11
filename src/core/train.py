@@ -4418,6 +4418,23 @@ def main():
                 seed=args.seed
             )
 
+            # Reload MLM-pretrained encoder weights into the NER model.
+            # mlm_pretrain() trains a separate AutoModelForMaskedLM instance and
+            # writes it to <mlm_output_dir>/final_model, but does not modify
+            # trainer.model_wrapper.model. Without this reload the subsequent NER
+            # training would use the original pretrained weights and the MLM
+            # adaptation would have no effect on downstream performance.
+            mlm_final_model = mlm_output_dir / "final_model"
+            if mlm_final_model.exists():
+                print(f"\nReloading MLM-pretrained weights from {mlm_final_model}")
+                trainer.model_wrapper.model_name = str(mlm_final_model)
+                trainer.model_wrapper._load_model()
+                trainer.model_wrapper._load_tokenizer()
+                trainer.model_wrapper._create_data_collator()
+            else:
+                print(f"\nWarning: MLM final_model not found at {mlm_final_model}; "
+                      f"NER training will use the original pretrained weights.")
+
             print(f"\n{'='*60}")
             print(f"MLM Pretraining completed!")
             print(f"Proceeding to NER training...")
