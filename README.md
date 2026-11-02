@@ -258,3 +258,24 @@ See `src/data_generation/README.md` for details.
 **CUDA out of memory**: Reduce `batch_size` in config, or enable `use_4bit` for LLaMA models
 
 **API key missing**: Configure in `.env` at project root (see `.env.example`)
+
+## Citation
+
+If you use this code or dataset in your research, please cite:
+
+> Wu, B., Maeda, A., and Akama, R. (2026). Leveraging LLM-Generated Synthetic Data for Low-Resource Named Entity Recognition in Historical Japanese Documents. *International Journal of Asian Language Processing*, 36(2), 2650008:1–2650008:26. https://doi.org/10.1142/S2717554526500086
+
+```bibtex
+@article{wu2026leveraging,
+  author  = {Bohao Wu and Akira Maeda and Ryo Akama},
+  title   = {Leveraging {LLM}-Generated Synthetic Data for Low-Resource Named Entity
+             Recognition in Historical {J}apanese Documents},
+  journal = {International Journal of Asian Language Processing},
+  volume  = {36},
+  number  = {2},
+  pages   = {2650008:1--2650008:26},
+  year    = {2026},
+  doi     = {10.1142/S2717554526500086},
+  url     = {https://doi.org/10.1142/S2717554526500086}
+}
+```
