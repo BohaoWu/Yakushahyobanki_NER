@@ -2,6 +2,8 @@
 
 Named Entity Recognition for Japanese historical texts (Yakushahyoubanki / actor critiques).
 
+[![Paper](https://img.shields.io/badge/Paper-IJALP%202026-b31b1b.svg)](https://www.worldscientific.com/doi/pdf/10.1142/S2717554526500086)
+[![DOI](https://img.shields.io/badge/DOI-10.1142%2FS2717554526500086-blue.svg)](https://doi.org/10.1142/S2717554526500086)
 [![Python](https://img.shields.io/badge/python-3.8+-green.svg)]()
 [![PyTorch](https://img.shields.io/badge/pytorch-2.0+-red.svg)]()
 
@@ -264,6 +266,8 @@ See `src/data_generation/README.md` for details.
 If you use this code or dataset in your research, please cite:
 
 > Wu, B., Maeda, A., and Akama, R. (2026). Leveraging LLM-Generated Synthetic Data for Low-Resource Named Entity Recognition in Historical Japanese Documents. *International Journal of Asian Language Processing*, 36(2), 2650008:1–2650008:26. https://doi.org/10.1142/S2717554526500086
+
+**Paper:** [[Publisher page]](https://doi.org/10.1142/S2717554526500086) [[PDF]](https://www.worldscientific.com/doi/pdf/10.1142/S2717554526500086)
 
 ```bibtex
 @article{wu2026leveraging,
